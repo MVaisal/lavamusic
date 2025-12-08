@@ -10,7 +10,7 @@ import {
 } from "discord.js";
 import { Command, type Context, type Lavamusic } from "../../structures/index";
 import { LyricsLine, LyricsResult } from "lavalink-client";
-import { Client } from "genius-lyrics"; 
+import { Client } from "genius-lyrics";
 
 export default class Lyrics extends Command {
     private geniusClient: Client;
@@ -118,7 +118,7 @@ export default class Lyrics extends Command {
         trackUrl = targetTrack.info.uri || "";
         artworkUrl = targetTrack.info.artworkUrl || "";
 
-        // Truncate title for safe display
+        // [SAFETY] Safe Title for Header (Max 50 chars)
         const safeTitle = trackTitle.length > 50 ? trackTitle.substring(0, 50) + "..." : trackTitle;
 
         const searchingContainer = new ContainerBuilder()
@@ -134,6 +134,7 @@ export default class Lyrics extends Command {
             flags: MessageFlags.IsComponentsV2,
         });
 
+        // --- [HYBRID FETCHING] ---
         try {
             const cleanTitle = this.cleanTitle(trackTitle);
             const isJp = this.isJapanese(trackTitle) || this.isJapanese(artistName);
@@ -258,9 +259,9 @@ export default class Lyrics extends Command {
                         fullContent += `\n\n*${ctx.locale("cmd.lyrics.session_expired")}*`;
                     }
 
-                    // [SAFETY CUT] Ensure absolute maximum length is 2000 chars
-                    if (fullContent.length > 2000) {
-                        fullContent = fullContent.substring(0, 1990) + "...";
+                    // [SAFETY CRITICAL] Force Cut to 1900 chars
+                    if (fullContent.length > 1900) {
+                        fullContent = fullContent.substring(0, 1897) + "...";
                     }
 
                     const mainLyricsSection =
@@ -268,21 +269,18 @@ export default class Lyrics extends Command {
                             textDisplay.setContent(fullContent),
                         );
 
-                    // [SAFETY URL] Validate URL before adding
-                    if (artworkUrl && artworkUrl.startsWith("http")) {
-                        const safeDesc = trackTitle.length > 90 ? trackTitle.substring(0, 90) + "..." : trackTitle;
+                    // [SAFETY CRITICAL] Validasi URL Gambar
+                    if (this.isValidUrl(artworkUrl)) {
+                        // Safe Title for Alt Text (Max 50)
+                        const altText = trackTitle.length > 50 ? trackTitle.substring(0, 50) : trackTitle;
                         
-                        try {
-                            mainLyricsSection.setThumbnailAccessory((thumbnail) =>
-                                thumbnail
-                                    .setURL(artworkUrl)
-                                    .setDescription(
-                                        ctx.locale("cmd.lyrics.artwork_description", { trackTitle: safeDesc }),
-                                    ),
-                            );
-                        } catch (e) {
-                            // If thumbnail fails, just ignore it and send text
-                        }
+                        mainLyricsSection.setThumbnailAccessory((thumbnail) =>
+                            thumbnail
+                                .setURL(artworkUrl)
+                                .setDescription(
+                                    ctx.locale("cmd.lyrics.artwork_description", { trackTitle: altText }),
+                                ),
+                        );
                     }
 
                     return new ContainerBuilder()
@@ -378,13 +376,13 @@ export default class Lyrics extends Command {
                                                 )
                                                 .join("\n");
                                             
-                                            // [SAFETY LIVE UPDATE]
+                                            // [SAFETY]
                                             let fullContent = ctx.locale("cmd.lyrics.lyrics_for_track", {
                                                 trackTitle,
                                                 trackUrl,
                                             }) + "\n" + (artistName ? `*${artistName}*\n\n` : "") + formatted;
                                             
-                                            if (fullContent.length > 2000) fullContent = fullContent.substring(0, 1990) + "...";
+                                            if (fullContent.length > 1900) fullContent = fullContent.substring(0, 1897) + "...";
 
                                             const liveLyricsContainer = new ContainerBuilder()
                                                 .setAccentColor(client.color.main)
@@ -414,13 +412,13 @@ export default class Lyrics extends Command {
                                 formatted = cleanedLyrics;
                             }
 
-                            // [SAFETY UNSUBSCRIBE]
+                            // [SAFETY]
                             let unsubContent = ctx.locale("cmd.lyrics.lyrics_for_track", {
                                 trackTitle,
                                 trackUrl,
                             }) + "\n" + (artistName ? `*${artistName}*\n\n` : "") + formatted + `\n\n*${ctx.locale("cmd.lyrics.unsubscribed")}*`;
 
-                            if (unsubContent.length > 2000) unsubContent = unsubContent.substring(0, 1990) + "...";
+                            if (unsubContent.length > 1900) unsubContent = unsubContent.substring(0, 1897) + "...";
 
                             const unsubLyricsContainer = new ContainerBuilder()
                                 .setAccentColor(client.color.main)
@@ -533,7 +531,7 @@ export default class Lyrics extends Command {
 		const pages: string[] = [];
 		let currentPage = "";
         
-        // [FIX CRITICAL] Reducing to 1500 to leave space for Header + Artist Name
+        // [SAFETY] Safe Buffer for Header
 		const MAX_CHARACTERS_PER_PAGE = 1500; 
 
 		for (const line of lines) {
@@ -585,5 +583,16 @@ export default class Lyrics extends Command {
     private isJapanese(text: string | undefined): boolean {
         if (!text) return false;
         return /[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uff9f\u4e00-\u9faf\u3400-\u4dbf]/.test(text);
+    }
+
+    // [SAFETY] Validate URL Helper
+    private isValidUrl(url: string | null | undefined): boolean {
+        if (!url) return false;
+        try {
+            const parsed = new URL(url);
+            return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+        } catch (e) {
+            return false;
+        }
     }
 }
