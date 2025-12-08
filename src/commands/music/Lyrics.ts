@@ -122,11 +122,14 @@ export default class Lyrics extends Command {
             artworkUrl = track.info.artworkUrl || "";
         }
 
+        // [SAFETY] Potong judul jika terlalu panjang untuk header
+        const safeTitle = trackTitle.length > 50 ? trackTitle.substring(0, 50) + "..." : trackTitle;
+
         const searchingContainer = new ContainerBuilder()
             .setAccentColor(client.color.main)
             .addTextDisplayComponents((textDisplay) =>
                 textDisplay.setContent(
-                    ctx.locale("cmd.lyrics.searching", { trackTitle: trackTitle.substring(0, 100) }),
+                    ctx.locale("cmd.lyrics.searching", { trackTitle: safeTitle }),
                 ),
             );
 
@@ -149,7 +152,7 @@ export default class Lyrics extends Command {
             } else if (typeof lyricsResult === "string") {
                 lyricsText = lyricsResult;
             } else if (typeof lyricsResult === "object" && (lyricsResult as any).text) {
-                 // Handle kasus jika plugin mengembalikan object { text: "..." }
+                 // Handle jika plugin mengembalikan object { text: "..." }
                  lyricsText = (lyricsResult as any).text;
             }
 
@@ -197,7 +200,8 @@ export default class Lyrics extends Command {
                         fullContent += `\n\n*${ctx.locale("cmd.lyrics.session_expired")}*`;
                     }
 
-                    // [FIX 1] Pastikan konten tidak melebihi 2000 karakter (Safe Limit)
+                    // [SAFETY CRITICAL] Pastikan konten tidak lebih dari 2000 karakter!
+                    // Ini yang menyebabkan error UnionValidator sebelumnya
                     if (fullContent.length > 2000) {
                         fullContent = fullContent.substring(0, 1990) + "...";
                     }
@@ -207,22 +211,19 @@ export default class Lyrics extends Command {
                             textDisplay.setContent(fullContent),
                         );
 
-                    // [FIX 2] Validasi URL Thumbnail agar tidak crash validator
+                    // [SAFETY] Validasi URL Thumbnail
                     if (artworkUrl && artworkUrl.startsWith("http")) {
                         try {
-                            // Safe Title for Alt Text
-                            const safeAltText = trackTitle.length > 90 ? trackTitle.substring(0, 90) + "..." : trackTitle;
-                            
                             mainLyricsSection.setThumbnailAccessory((thumbnail) =>
                                 thumbnail
                                     .setURL(artworkUrl)
                                     .setDescription(
-                                        // Gunakan fallback text jika locale gagal
-                                        ctx.locale("cmd.lyrics.artwork_description", { trackTitle: safeAltText }) || "Artwork"
+                                        // Gunakan safe title agar tidak error panjang karakter alt text
+                                        ctx.locale("cmd.lyrics.artwork_description", { trackTitle: safeTitle }),
                                     ),
                             );
                         } catch (e) {
-                            // Ignore thumbnail error to prevent crash
+                            // Abaikan jika thumbnail gagal
                         }
                     }
 
@@ -294,7 +295,7 @@ export default class Lyrics extends Command {
                             running = true;
                             subscriptionActive = true;
                             const maxTime = Date.now() + 3 * 60 * 1000;
-                            // Check if lines exist before accessing
+                            // Ensure lyricsLines exists
                             const lyricsLines = (lyricsResult as LyricsResult).lines;
                             
                             if (lyricsLines) {
@@ -319,7 +320,7 @@ export default class Lyrics extends Command {
                                                 )
                                                 .join("\n");
                                             
-                                            // [FIX 3] Safe length for live lyrics update
+                                            // [SAFETY LIVE]
                                             let liveContent = ctx.locale("cmd.lyrics.lyrics_for_track", {
                                                     trackTitle,
                                                     trackUrl,
@@ -328,9 +329,7 @@ export default class Lyrics extends Command {
                                                 (artistName ? `*${artistName}*\n\n` : "") +
                                                 formatted;
                                             
-                                            if (liveContent.length > 2000) {
-                                                liveContent = liveContent.substring(0, 1990) + "...";
-                                            }
+                                            if (liveContent.length > 2000) liveContent = liveContent.substring(0, 1990) + "...";
 
                                             const liveLyricsContainer = new ContainerBuilder()
                                                 .setAccentColor(client.color.main)
@@ -360,7 +359,7 @@ export default class Lyrics extends Command {
                                 formatted = cleanedLyrics;
                             }
 
-                            // [FIX 4] Safe length for unsubscribe message
+                            // [SAFETY UNSUBSCRIBE]
                             let unsubContent = ctx.locale("cmd.lyrics.lyrics_for_track", {
                                     trackTitle,
                                     trackUrl,
@@ -370,9 +369,7 @@ export default class Lyrics extends Command {
                                 formatted +
                                 `\n\n*${ctx.locale("cmd.lyrics.unsubscribed")}*`;
 
-                            if (unsubContent.length > 2000) {
-                                unsubContent = unsubContent.substring(0, 1990) + "...";
-                            }
+                            if (unsubContent.length > 2000) unsubContent = unsubContent.substring(0, 1990) + "...";
 
                             const unsubLyricsContainer = new ContainerBuilder()
                                 .setAccentColor(client.color.main)
@@ -545,8 +542,8 @@ export default class Lyrics extends Command {
         const pages: string[] = [];
         let currentPage = "";
         
-        // [FIX UTAMA] Turunkan batas karakter dari 2800 ke 1500 agar aman dari UnionValidator
-        const MAX_CHARACTERS_PER_PAGE = 1500; 
+        // [FIX UTAMA] Turunkan batas dari 2800 ke 1500 agar tidak crash UnionValidator
+        const MAX_CHARACTERS_PER_PAGE = 1500;
 
         for (const line of lines) {
             const lineWithNewline = `${line}\n`;
