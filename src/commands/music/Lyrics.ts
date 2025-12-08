@@ -134,7 +134,6 @@ export default class Lyrics extends Command {
             flags: MessageFlags.IsComponentsV2,
         });
 
-        // --- [HYBRID FETCHING] ---
         try {
             const cleanTitle = this.cleanTitle(trackTitle);
             const isJp = this.isJapanese(trackTitle) || this.isJapanese(artistName);
@@ -259,9 +258,9 @@ export default class Lyrics extends Command {
                         fullContent += `\n\n*${ctx.locale("cmd.lyrics.session_expired")}*`;
                     }
 
-                    // [FIX] Ensure content length is safe before setting
+                    // [SAFETY CUT] Ensure absolute maximum length is 2000 chars
                     if (fullContent.length > 2000) {
-                        fullContent = fullContent.substring(0, 1997) + "...";
+                        fullContent = fullContent.substring(0, 1990) + "...";
                     }
 
                     const mainLyricsSection =
@@ -269,18 +268,21 @@ export default class Lyrics extends Command {
                             textDisplay.setContent(fullContent),
                         );
 
-                    // [FIX] Validate Artwork URL & Length
+                    // [SAFETY URL] Validate URL before adding
                     if (artworkUrl && artworkUrl.startsWith("http")) {
-                        // Alt Text tidak boleh > 100 char (aman)
-                        const safeDesc = trackTitle.length > 50 ? trackTitle.substring(0, 50) + "..." : trackTitle;
+                        const safeDesc = trackTitle.length > 90 ? trackTitle.substring(0, 90) + "..." : trackTitle;
                         
-                        mainLyricsSection.setThumbnailAccessory((thumbnail) =>
-                            thumbnail
-                                .setURL(artworkUrl)
-                                .setDescription(
-                                    ctx.locale("cmd.lyrics.artwork_description", { trackTitle: safeDesc }),
-                                ),
-                        );
+                        try {
+                            mainLyricsSection.setThumbnailAccessory((thumbnail) =>
+                                thumbnail
+                                    .setURL(artworkUrl)
+                                    .setDescription(
+                                        ctx.locale("cmd.lyrics.artwork_description", { trackTitle: safeDesc }),
+                                    ),
+                            );
+                        } catch (e) {
+                            // If thumbnail fails, just ignore it and send text
+                        }
                     }
 
                     return new ContainerBuilder()
@@ -376,13 +378,13 @@ export default class Lyrics extends Command {
                                                 )
                                                 .join("\n");
                                             
-                                            // [FIX] Safe length for live update
+                                            // [SAFETY LIVE UPDATE]
                                             let fullContent = ctx.locale("cmd.lyrics.lyrics_for_track", {
                                                 trackTitle,
                                                 trackUrl,
                                             }) + "\n" + (artistName ? `*${artistName}*\n\n` : "") + formatted;
                                             
-                                            if (fullContent.length > 2000) fullContent = fullContent.substring(0, 1997) + "...";
+                                            if (fullContent.length > 2000) fullContent = fullContent.substring(0, 1990) + "...";
 
                                             const liveLyricsContainer = new ContainerBuilder()
                                                 .setAccentColor(client.color.main)
@@ -412,13 +414,13 @@ export default class Lyrics extends Command {
                                 formatted = cleanedLyrics;
                             }
 
-                            // [FIX] Safe Length
+                            // [SAFETY UNSUBSCRIBE]
                             let unsubContent = ctx.locale("cmd.lyrics.lyrics_for_track", {
                                 trackTitle,
                                 trackUrl,
                             }) + "\n" + (artistName ? `*${artistName}*\n\n` : "") + formatted + `\n\n*${ctx.locale("cmd.lyrics.unsubscribed")}*`;
 
-                            if (unsubContent.length > 2000) unsubContent = unsubContent.substring(0, 1997) + "...";
+                            if (unsubContent.length > 2000) unsubContent = unsubContent.substring(0, 1990) + "...";
 
                             const unsubLyricsContainer = new ContainerBuilder()
                                 .setAccentColor(client.color.main)
@@ -530,8 +532,9 @@ export default class Lyrics extends Command {
 		const lines = lyrics.split("\n");
 		const pages: string[] = [];
 		let currentPage = "";
-		// [FIX] Reduce max chars to 1900 to stay safely under Discord 2000 limit
-		const MAX_CHARACTERS_PER_PAGE = 1900; 
+        
+        // [FIX CRITICAL] Reducing to 1500 to leave space for Header + Artist Name
+		const MAX_CHARACTERS_PER_PAGE = 1500; 
 
 		for (const line of lines) {
 			const lineWithNewline = `${line}\n`;
