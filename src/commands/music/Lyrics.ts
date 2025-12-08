@@ -117,51 +117,52 @@ export default class Lyrics extends Command {
         
         await ctx.sendDeferMessage({ embeds: [searchingEmbed] });
 
-        // --- HYBRID FETCHING LOGIC ---
+        // --- 2. HYBRID FETCHING LOGIC ---
         try {
             const cleanTitle = this.cleanTitle(trackTitle);
             const isJp = this.isJapanese(trackTitle) || this.isJapanese(artistName);
 
             // =========================================================
-            // A. GENIUS (ROMAJI) - AGGRESSIVE MODE
+            // A. GENIUS (ROMAJI) - STRICT MODE
             // =========================================================
             if (isJp) {
-                // Kita coba 2 query berbeda untuk memastikan dapat Romaji
+                // Kita coba 3 query berbeda untuk memastikan dapat Romaji
                 const romajiQueries = [
-                    `Genius Romanizations ${cleanTitle}`, // Prioritas 1: Langsung tembak artis Genius Romanizations
-                    `${cleanTitle} ${artistName} Romanized`, // Prioritas 2: Keyword umum
-                    `${cleanTitle} Romaji` // Prioritas 3: Keyword alternatif
+                    `Genius Romanizations ${cleanTitle}`, // TARGET UTAMA: Cari artis Genius Romanizations
+                    `${cleanTitle} Romanized`,            // TARGET KEDUA: Judul + Romanized
+                    `${cleanTitle} ${artistName} Romanized` // TARGET KETIGA: Lengkap
                 ];
 
                 for (const query of romajiQueries) {
-                    if (lyricsResult) break; // Jika sudah ketemu di iterasi sebelumnya, stop.
+                    if (lyricsResult) break; // Jika sudah ketemu, stop.
 
                     try {
                         const searches = await this.geniusClient.songs.search(query);
                         
-                        // SCAN SEMUA HASIL (Bukan cuma yang pertama)
+                        // SCAN SEMUA HASIL (Looping hasil pencarian)
+                        // Kita mencari yang BENAR-BENAR Romaji
                         for (const s of searches) {
                             const t = s.title.toLowerCase();
                             const a = s.artist.name.toLowerCase();
                             
-                            // Kriteria Ketat Romaji:
-                            // 1. Artisnya harus "Genius Romanizations"
+                            // Kriteria Mutlak Romaji:
+                            // 1. Artisnya ADALAH "Genius Romanizations" (Paling Akurat)
                             // 2. ATAU Judul mengandung "romanized" / "romaji"
-                            const isGeniusRomaji = a.includes("genius romanizations");
-                            const hasRomajiInTitle = t.includes("romanized") || t.includes("romaji");
+                            const matchArtist = a.includes("genius romanizations");
+                            const matchTitle = t.includes("romanized") || t.includes("romaji");
 
-                            if (isGeniusRomaji || hasRomajiInTitle) {
+                            if (matchArtist || matchTitle) {
                                 const text = await s.lyrics();
                                 if (text && text.length > 10) {
                                     lyricsResult = text;
                                     isSynced = false;
                                     
-                                    // Override Info Track agar sesuai dengan hasil Romaji
+                                    // Update Info agar menampilkan judul Romaji
                                     trackTitle = s.title; 
                                     artistName = s.artist.name;
                                     artworkUrl = s.thumbnail;
                                     
-                                    // Ketemu! Keluar dari loop pencarian hasil
+                                    // STOP LOOPING HASIL, STOP LOOPING QUERY
                                     break; 
                                 }
                             }
@@ -171,7 +172,7 @@ export default class Lyrics extends Command {
             }
 
             // =========================================================
-            // B. PLUGIN LAVALINK (Synced - Backup 1)
+            // B. PLUGIN LAVALINK (Synced) - Jika Romaji GAGAL ditemukan
             // =========================================================
             if (!lyricsResult) {
                 try {
@@ -195,14 +196,15 @@ export default class Lyrics extends Command {
             }
 
             // =========================================================
-            // C. GENIUS (NORMAL - Backup Terakhir)
+            // C. GENIUS (NORMAL) - Backup Terakhir (Apapun yang ada)
             // =========================================================
             if (!lyricsResult) {
                 try {
                     const normalQuery = `${cleanTitle} ${artistName}`;
                     const searches = await this.geniusClient.songs.search(normalQuery);
+                    
                     if (searches.length > 0) {
-                        const song = searches[0];
+                        const song = searches[0]; // Ambil yang paling atas
                         const text = await song.lyrics();
                         if (text && text.length > 10) {
                             lyricsResult = text;
@@ -294,7 +296,6 @@ export default class Lyrics extends Command {
                     components: [getNavigationRow(currentPage), liveLyricsRow]
                 });
 
-                // --- COLLECTOR ---
                 const filter = (interaction: ButtonInteraction<"cached">) => interaction.user.id === ctx.author?.id;
                 let collectorActive = true;
                 let running = false;
