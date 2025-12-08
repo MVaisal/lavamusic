@@ -4,9 +4,8 @@ import {
     type ButtonInteraction,
     ButtonStyle,
     ComponentType,
-    ContainerBuilder,
+    EmbedBuilder, // Ganti Container/Section dengan Embed
     MessageFlags,
-    SectionBuilder,
 } from "discord.js";
 import { Command, type Context, type Lavamusic } from "../../structures/index";
 import { LyricsLine, LyricsResult } from "lavalink-client";
@@ -55,7 +54,7 @@ export default class Lyrics extends Command {
     }
 
     public async run(client: Lavamusic, ctx: Context): Promise<any> {
-        // --- SAFE STRING HELPER ---
+        // --- HELPER SAFE STRING ---
         const safeStr = (str: any): string => {
             if (typeof str === 'string') return str;
             if (!str) return "";
@@ -72,7 +71,7 @@ export default class Lyrics extends Command {
             }
         };
 
-        // 1. Get Query
+        // 1. Ambil Query
         let songQuery = "";
         if (ctx.options && typeof ctx.options.get === "function") {
             try { 
@@ -84,26 +83,24 @@ export default class Lyrics extends Command {
 
         const player = client.manager.getPlayer(ctx.guild!.id);
 
-        // 2. No Music Handling
+        // 2. Cek Musik
         if (!songQuery && !player) {
-            const noMusicContainer = new ContainerBuilder()
-                .setAccentColor(client.color.red)
-                .addTextDisplayComponents((textDisplay) =>
-                    textDisplay.setContent(getTxt("event.message.no_music_playing", {}, "No music playing"))
-                );
+            const noMusicEmbed = new EmbedBuilder()
+                .setColor(client.color.red)
+                .setDescription(getTxt("event.message.no_music_playing", {}, "No music playing"));
+            
             return ctx.sendMessage({
-                components: [noMusicContainer],
-                flags: MessageFlags.IsComponentsV2,
+                embeds: [noMusicEmbed], // Gunakan Embeds, bukan Components V2
             });
         }
 
         let trackTitle = "Unknown Title";
         let artistName = "Unknown Artist";
         let trackUrl = "https://discord.com";
-        // artworkUrl dihapus dari penggunaan komponen untuk mencegah error
+        let artworkUrl = "";
         let lyricsResult: LyricsResult | string = "";
 
-        // 3. Fetch Info
+        // 3. Fetch Data
         if (songQuery) {
             const result = await this.fetchTrackAndLyrics({ client, ctx, songQuery, player });
             if (!result) return;
@@ -111,33 +108,29 @@ export default class Lyrics extends Command {
             trackTitle = safeStr(result.trackTitle) || "Unknown Title";
             artistName = safeStr(result.artistName) || "Unknown Artist";
             trackUrl = safeStr(result.trackUrl) || "https://discord.com";
+            artworkUrl = safeStr(result.artworkUrl) || "";
         } else if (player && player.queue.current) {
             lyricsResult = await player.getCurrentLyrics(false);
             const track = player.queue.current;
             trackTitle = safeStr(track.info.title).replace(/\[.*?]|\(.*?\)|{.*?}/g, "").trim() || "Unknown Title";
             artistName = safeStr(track.info.author).replace(/\[.*?]|\(.*?\)|{.*?}/g, "").trim() || "Unknown Artist";
             trackUrl = (track.info.uri && track.info.uri.startsWith("http")) ? track.info.uri : "https://discord.com";
+            artworkUrl = safeStr(track.info.artworkUrl) || "";
         }
 
-        const safeTitle = trackTitle.length > 50 ? trackTitle.substring(0, 45) + "..." : trackTitle;
-        const safeArtist = artistName.length > 40 ? artistName.substring(0, 35) + "..." : artistName;
+        const safeTitle = trackTitle.length > 250 ? trackTitle.substring(0, 245) + "..." : trackTitle;
 
         // 4. Searching Message
-        const searchingContainer = new ContainerBuilder()
-            .setAccentColor(client.color.main)
-            .addTextDisplayComponents((textDisplay) =>
-                textDisplay.setContent(
-                    getTxt("cmd.lyrics.searching", { trackTitle: safeTitle }, `Searching for ${safeTitle}...`).substring(0, 100)
-                )
-            );
+        const searchingEmbed = new EmbedBuilder()
+            .setColor(client.color.main)
+            .setDescription(getTxt("cmd.lyrics.searching", { trackTitle: safeTitle }, `Searching for ${safeTitle}...`));
 
         await ctx.sendDeferMessage({
-            components: [searchingContainer],
-            flags: MessageFlags.IsComponentsV2,
+            embeds: [searchingEmbed],
         });
 
         try {
-            // 5. Parse Lyrics
+            // 5. Parse Lirik
             let lyricsText: string | null = null;
             if (lyricsResult && typeof lyricsResult === "object") {
                 if(Array.isArray((lyricsResult as any).lines)) {
@@ -150,15 +143,10 @@ export default class Lyrics extends Command {
             }
 
             if (!lyricsText || lyricsText.length < 5) {
-                const noResultsContainer = new ContainerBuilder()
-                    .setAccentColor(client.color.red)
-                    .addTextDisplayComponents((textDisplay) =>
-                        textDisplay.setContent(getTxt("cmd.lyrics.errors.no_results", {}, "No results found."))
-                    );
-                await ctx.editMessage({
-                    components: [noResultsContainer],
-                    flags: MessageFlags.IsComponentsV2,
-                });
+                const noResultsEmbed = new EmbedBuilder()
+                    .setColor(client.color.red)
+                    .setDescription(getTxt("cmd.lyrics.errors.no_results", {}, "No results found."));
+                await ctx.editMessage({ embeds: [noResultsEmbed] });
                 return;
             }
 
@@ -168,35 +156,36 @@ export default class Lyrics extends Command {
                 const lyricsPages = this.paginateLyrics(cleanedLyrics, ctx);
                 let currentPage = 0;
 
-                // --- CONTAINER BUILDER (NO THUMBNAIL) ---
-                const createLyricsContainer = (pageIndex: number, finalState: boolean = false) => {
+                // --- BUILDER EMBED (Solusi Stabil) ---
+                const createLyricsEmbed = (pageIndex: number, finalState: boolean = false) => {
                     const currentLyricsPage = lyricsPages[pageIndex] || "End.";
 
-                    let header = `**${safeTitle}**\n`;
-                    if(safeArtist) header += `*${safeArtist}*\n\n`;
+                    const embed = new EmbedBuilder()
+                        .setColor(client.color.main)
+                        .setTitle(safeTitle)
+                        .setURL(trackUrl)
+                        .setDescription(currentLyricsPage);
 
-                    let fullContent = header + currentLyricsPage;
+                    if (artistName) {
+                        embed.setAuthor({ name: artistName });
+                    }
+
+                    // Thumbnail aman di Embed (Validasi HTTPs)
+                    if (artworkUrl && artworkUrl.startsWith("http")) {
+                        embed.setThumbnail(artworkUrl);
+                    }
 
                     if (!finalState) {
-                        fullContent += `\n\nPage ${pageIndex + 1}/${lyricsPages.length}`;
+                        embed.setFooter({ 
+                            text: getTxt("cmd.lyrics.page_indicator", { current: pageIndex + 1, total: lyricsPages.length }, `Page ${pageIndex + 1}/${lyricsPages.length}`) 
+                        });
                     } else {
-                        fullContent += `\n\n*${getTxt("cmd.lyrics.session_expired", {}, "Session Expired")}*`;
+                        embed.setFooter({ 
+                            text: getTxt("cmd.lyrics.session_expired", {}, "Session Expired") 
+                        });
                     }
 
-                    // Strict Limit untuk Section Content (Max safe 900 chars)
-                    if (fullContent.length > 900) {
-                        fullContent = fullContent.substring(0, 890) + "...";
-                    }
-
-                    // HAPUS setThumbnailAccessory sepenuhnya untuk menghindari UnionValidator Error
-                    const mainLyricsSection = new SectionBuilder()
-                        .addTextDisplayComponents((textDisplay) =>
-                            textDisplay.setContent(fullContent)
-                        );
-
-                    return new ContainerBuilder()
-                        .setAccentColor(client.color.main)
-                        .addSectionComponents(mainLyricsSection);
+                    return embed;
                 };
 
                 const getNavigationRow = (current: number) => {
@@ -213,12 +202,9 @@ export default class Lyrics extends Command {
                 );
 
                 await ctx.editMessage({
-                    components: [
-                        createLyricsContainer(currentPage),
-                        getNavigationRow(currentPage),
-                        liveLyricsRow
-                    ],
-                    flags: MessageFlags.IsComponentsV2,
+                    embeds: [createLyricsEmbed(currentPage)],
+                    components: [getNavigationRow(currentPage), liveLyricsRow],
+                    // HAPUS flags: MessageFlags.IsComponentsV2
                 });
 
                 // --- COLLECTOR ---
@@ -237,6 +223,7 @@ export default class Lyrics extends Command {
                             time: 60000,
                         });
 
+                        // LIVE LYRICS
                         if (interaction.customId === "lyrics_subscribe") {
                             await interaction.reply({ content: "Subscribed!", flags: MessageFlags.Ephemeral });
                             running = true;
@@ -259,26 +246,26 @@ export default class Lyrics extends Command {
 
                                         if (currentIdx !== lastLine) {
                                             lastLine = currentIdx;
-                                            // Small snippet logic
-                                            const startLine = Math.max(0, currentIdx - 2);
-                                            const endLine = Math.min(lyricsLines.length, currentIdx + 3);
+                                            const startLine = Math.max(0, currentIdx - 3);
+                                            const endLine = Math.min(lyricsLines.length, currentIdx + 4);
+                                            
                                             const formatted = lyricsLines.slice(startLine, endLine)
                                                 .map((l: any, i: number) => {
-                                                    return (startLine + i) === currentIdx ? `**${safeStr(l.line)}**` : safeStr(l.line);
+                                                    const isCurrent = (startLine + i) === currentIdx;
+                                                    return isCurrent ? `**__${safeStr(l.line)}__**` : safeStr(l.line);
                                                 }).join("\n");
                                             
-                                            let liveContent = `**${safeTitle}** (Live)\n\n${formatted}`;
-                                            if (liveContent.length > 900) liveContent = liveContent.substring(0, 890) + "...";
-
-                                            const liveContainer = new ContainerBuilder()
-                                                .setAccentColor(client.color.main)
-                                                .addSectionComponents(
-                                                    new SectionBuilder().addTextDisplayComponents((t) => t.setContent(liveContent))
-                                                );
+                                            const liveEmbed = new EmbedBuilder()
+                                                .setColor(client.color.main)
+                                                .setTitle(`${safeTitle} (Live)`)
+                                                .setDescription(formatted + "\n\nListening...")
+                                                .setURL(trackUrl);
+                                            
+                                            if(artworkUrl && artworkUrl.startsWith("http")) liveEmbed.setThumbnail(artworkUrl);
 
                                             await ctx.editMessage({
-                                                components: [liveContainer, liveLyricsRow],
-                                                flags: MessageFlags.IsComponentsV2,
+                                                embeds: [liveEmbed],
+                                                components: [liveLyricsRow],
                                             }).catch(() => {});
                                         }
                                         await new Promise((res) => setTimeout(res, 1000));
@@ -292,7 +279,8 @@ export default class Lyrics extends Command {
                             running = false;
                             subscriptionActive = false;
                             await interaction.update({
-                                components: [createLyricsContainer(currentPage), getNavigationRow(currentPage), liveLyricsRow],
+                                embeds: [createLyricsEmbed(currentPage)],
+                                components: [getNavigationRow(currentPage), liveLyricsRow],
                             });
                             continue;
                         }
@@ -302,38 +290,50 @@ export default class Lyrics extends Command {
                         else if (interaction.customId === "stop") {
                             collectorActive = false;
                             running = false;
-                            await interaction.update({ components: [createLyricsContainer(currentPage, true)] });
+                            await interaction.update({ 
+                                embeds: [createLyricsEmbed(currentPage, true)],
+                                components: [] // Hapus tombol
+                            });
                             break;
                         }
 
-                        const comps: any[] = [createLyricsContainer(currentPage)];
+                        // Update Pagination View
+                        const comps: any[] = [];
                         if (!subscriptionActive) comps.push(getNavigationRow(currentPage));
                         comps.push(liveLyricsRow);
-                        await interaction.update({ components: comps });
+                        
+                        await interaction.update({ 
+                            embeds: [createLyricsEmbed(currentPage)],
+                            components: comps 
+                        });
 
                     } catch (e) {
                         collectorActive = false;
                     }
                 }
 
+                // Cleanup
                 if (ctx.guild?.members.me?.permissionsIn(ctx.channelId).has("SendMessages")) {
-                    const finalContainer = createLyricsContainer(currentPage, true);
+                    const finalEmbed = createLyricsEmbed(currentPage, true);
                     const disabledRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
                         new ButtonBuilder().setCustomId("ls").setLabel("Sub").setStyle(ButtonStyle.Success).setDisabled(true),
                         new ButtonBuilder().setCustomId("lu").setLabel("Unsub").setStyle(ButtonStyle.Danger).setDisabled(true)
                     );
-                    await ctx.editMessage({ components: [finalContainer, disabledRow], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
+                    await ctx.editMessage({ 
+                        embeds: [finalEmbed], 
+                        components: [disabledRow] 
+                    }).catch(() => {});
                 }
 
             } else {
-                 const noRes = new ContainerBuilder().setAccentColor(client.color.red).addTextDisplayComponents((t) => t.setContent("No lyrics text available."));
-                 await ctx.editMessage({ components: [noRes], flags: MessageFlags.IsComponentsV2 });
+                 const noResEmbed = new EmbedBuilder().setColor(client.color.red).setDescription("No lyrics text available.");
+                 await ctx.editMessage({ embeds: [noResEmbed], components: [] });
             }
 
         } catch (error) {
             client.logger.error(error);
-            const errC = new ContainerBuilder().setAccentColor(client.color.red).addTextDisplayComponents((t) => t.setContent("An error occurred."));
-            await ctx.editMessage({ components: [errC], flags: MessageFlags.IsComponentsV2 });
+            const errEmbed = new EmbedBuilder().setColor(client.color.red).setDescription("An error occurred fetching lyrics.");
+            await ctx.editMessage({ embeds: [errEmbed], components: [] });
         }
     }
 
@@ -344,8 +344,8 @@ export default class Lyrics extends Command {
         const searchRes = await client.manager.search(songQuery, ctx.author);
         const track = searchRes.tracks[0];
         if (!track) {
-            const noRes = new ContainerBuilder().setAccentColor(client.color.red).addTextDisplayComponents((t) => t.setContent(ctx.locale("cmd.lyrics.errors.no_results")));
-            await ctx.editMessage({ components: [noRes], flags: MessageFlags.IsComponentsV2 });
+            const noRes = new EmbedBuilder().setColor(client.color.red).setDescription(ctx.locale("cmd.lyrics.errors.no_results"));
+            await ctx.editMessage({ embeds: [noRes] });
             return null;
         }
 
@@ -367,11 +367,12 @@ export default class Lyrics extends Command {
         return { lyricsResult, trackTitle, artistName, trackUrl, artworkUrl };
     }
 
+    // Embed Description Limit is 4096 (Much larger than Section's 1000)
     paginateLyrics(lyrics: string, ctx: Context): string[] {
         const lines = lyrics.split("\n");
         const pages: string[] = [];
         let currentPage = "";
-        const MAX_CHARACTERS_PER_PAGE = 750; // Ultra Safe Limit
+        const MAX_CHARACTERS_PER_PAGE = 3000; // Aman untuk Embed
 
         for (const line of lines) {
             const lineWithNewline = `${line}\n`;
