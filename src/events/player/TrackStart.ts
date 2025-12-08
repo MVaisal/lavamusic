@@ -49,7 +49,20 @@ class TrackStart extends import_structures.Event {
     // Jika ada interval update dari lagu sebelumnya atau command !nowplaying sebelumnya, matikan dulu.
     const oldInterval = player.get("autoUpdateInterval");
     if (oldInterval) clearInterval(oldInterval);
-    // ------------------------------------
+
+    // --- [UBAHAN: HAPUS TOMBOL PESAN LAMA] ---
+    // Kita cek apakah ada pesan nowPlayingMessage (dari track sebelumnya atau command NP)
+    // Jika ada, kita hapus tombolnya supaya tidak ada double button.
+    const oldMessage = player.get("nowPlayingMessage");
+    if (oldMessage) {
+        try {
+            await oldMessage.edit({ components: [] });
+        } catch (e) {
+            // Abaikan error jika pesan sudah dihapus manual
+            console.log("Pesan lama tidak ditemukan atau sudah dihapus");
+        }
+    }
+    // ------------------------------------------
 
     // 1. UPDATE STATUS BOT
     try {
@@ -124,7 +137,11 @@ class TrackStart extends import_structures.Event {
             embeds: [embed],
             components: createButtonRow(player, this.client)
         });
-        player.set("messageId", message.id);
+        
+        // --- [UBAHAN: SIMPAN OBJECT PESAN] ---
+        // Kita simpan seluruh pesan, bukan cuma ID, agar bisa diedit (hapus tombol) oleh command NP
+        player.set("nowPlayingMessage", message);
+        // -------------------------------------
 
         // --- [AUTO UPDATE 30 DETIK] ---
         const interval = setInterval(async () => {

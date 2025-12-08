@@ -59,7 +59,18 @@ export default class Nowplaying extends Command {
         if (oldInterval) {
             clearInterval(oldInterval as NodeJS.Timeout);
         }
-        // ----------------------------------
+
+        // --- [UBAHAN: HAPUS TOMBOL PESAN LAMA] ---
+        // Kita ambil pesan yang tersimpan di player, dan hapus komponen tombolnya
+        const oldMessage = player.get("nowPlayingMessage");
+        if (oldMessage) {
+            try {
+                await oldMessage.edit({ components: [] });
+            } catch (e) {
+                // Abaikan jika pesan sudah terhapus
+            }
+        }
+        // -----------------------------------------
 
         const track = player.queue.current;
         const duration = track.info.duration;
@@ -111,6 +122,11 @@ export default class Nowplaying extends Command {
             embeds: [embed],
             components: components
         });
+
+        // --- [UBAHAN: SIMPAN PESAN BARU] ---
+        // Simpan pesan ini agar tombolnya bisa dihapus oleh TrackStart berikutnya
+        player.set("nowPlayingMessage", message);
+        // -----------------------------------
 
         // --- [LOGIKA UPDATE BARU] ---
         // 2. Buat Interval baru untuk pesan ini
