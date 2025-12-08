@@ -4,7 +4,7 @@ import {
     type ButtonInteraction,
     ButtonStyle,
     ComponentType,
-    EmbedBuilder,
+    EmbedBuilder, // [GANTI] Pakai EmbedBuilder standar (Stabil & Anti-Crash)
     MessageFlags,
 } from "discord.js";
 import { Command, type Context, type Lavamusic } from "../../structures/index";
@@ -55,12 +55,13 @@ export default class Lyrics extends Command {
             ],
         });
 
+        // Setup Genius
         const token = process.env.GENIUS_API || process.env.GENIUS_API_KEY || process.env.GENIUS_TOKEN;
         this.geniusClient = new Client(token);
     }
 
     public async run(client: Lavamusic, ctx: Context): Promise<any> {
-        // 1. AMBIL QUERY
+        // --- 1. AMBIL QUERY ---
         let songQuery = "";
         if (ctx.options && typeof ctx.options.get === "function") {
             const songOpt = ctx.options.get("song");
@@ -72,11 +73,13 @@ export default class Lyrics extends Command {
 
         const player = client.manager.getPlayer(ctx.guild!.id);
 
+        // Helper Locale (Anti-Crash)
         const getTxt = (key: string, args?: any, defaultTxt?: string) => {
             const res = ctx.locale(key, args);
             return res && res !== key ? res : (defaultTxt || "Unknown Text");
         };
 
+        // Jika tidak ada lagu & query
         if (!songQuery && !player) {
             const embed = new EmbedBuilder()
                 .setColor(client.color.red)
@@ -93,6 +96,7 @@ export default class Lyrics extends Command {
 
         let targetTrack: any = null;
 
+        // Tentukan Target Lagu
         if (songQuery) {
             const searchRes = await client.manager.search(songQuery, ctx.author);
             if (searchRes.tracks.length > 0) targetTrack = searchRes.tracks[0];
@@ -112,28 +116,29 @@ export default class Lyrics extends Command {
         trackUrl = targetTrack.info.uri || "";
         artworkUrl = targetTrack.info.artworkUrl || "";
 
+        // Kirim pesan "Searching..."
         const searchingEmbed = new EmbedBuilder()
             .setColor(client.color.main)
             .setDescription(`🔎 ${getTxt("cmd.lyrics.searching", { trackTitle: trackTitle }, `Searching lyrics for **${trackTitle}**...`)}`);
         
         await ctx.sendDeferMessage({ embeds: [searchingEmbed] });
 
-        // --- 2. HYBRID FETCHING LOGIC ---
+        // --- 2. PROSES PENCARIAN (HYBRID + SMART FILTER) ---
         try {
             const cleanTitle = this.cleanTitle(trackTitle);
             const isJp = this.isJapanese(trackTitle) || this.isJapanese(artistName);
 
-            // A. GENIUS (ROMAJI) - Dengan Filter Cerdas
+            // A. GENIUS (ROMAJI) - SCANNING MODE
             if (isJp) {
                 try {
-                    // Cari dengan keyword "Romanized" (lebih umum di Genius daripada Romaji)
+                    // Cari dengan keyword "Romanized"
                     const romajiQuery = `${cleanTitle} ${artistName} Romanized`; 
                     const searches = await this.geniusClient.songs.search(romajiQuery);
                     
                     if (searches.length > 0) {
                         let selectedSong = null;
 
-                        // [LOGIKA BARU] Scan hasil pencarian untuk menemukan yang benar-benar Romaji
+                        // [LOGIKA BARU] Scan hasil pencarian untuk menemukan "Genius Romanizations"
                         for (const s of searches) {
                             const t = s.title.toLowerCase();
                             const a = s.artist.name.toLowerCase();
@@ -145,15 +150,15 @@ export default class Lyrics extends Command {
                             }
                         }
 
-                        // Jika tidak ketemu yang spesifik, tapi hasil pencarian sedikit, ambil yang pertama sebagai cadangan
-                        // Tapi kita skip dulu agar tidak mengambil lirik Kanji
-                        
+                        // Jika ketemu yang spesifik Romaji, ambil itu.
+                        // Jika tidak, JANGAN ambil yang pertama (karena biasanya Kanji), biarkan lanjut ke Plugin.
                         if (selectedSong) {
                             const text = await selectedSong.lyrics();
                             if (text && text.length > 10) {
                                 lyricsResult = text;
                                 isSynced = false;
-                                trackTitle = selectedSong.title; // Pakai judul dari Genius (biasanya ada tulisan Romanized)
+                                // Override info agar sesuai Genius Romaji
+                                trackTitle = selectedSong.title; 
                                 artistName = selectedSong.artist.name;
                                 artworkUrl = selectedSong.thumbnail;
                             }
@@ -162,7 +167,7 @@ export default class Lyrics extends Command {
                 } catch (e) { }
             }
 
-            // B. PLUGIN LAVALINK (Synced)
+            // B. PLUGIN LAVALINK (Synced) - Jika Romaji tidak ketemu
             if (!lyricsResult) {
                 try {
                     let res: LyricsResult | null = null;
@@ -184,13 +189,13 @@ export default class Lyrics extends Command {
                 } catch (e) { }
             }
 
-            // C. GENIUS (NORMAL) - Fallback Terakhir
+            // C. GENIUS (NORMAL) - Fallback Terakhir (Kanji/Ori)
             if (!lyricsResult) {
                 try {
                     const normalQuery = `${cleanTitle} ${artistName}`;
                     const searches = await this.geniusClient.songs.search(normalQuery);
                     if (searches.length > 0) {
-                        const song = searches[0];
+                        const song = searches[0]; // Ambil yang paling atas
                         const text = await song.lyrics();
                         if (text && text.length > 10) {
                             lyricsResult = text;
@@ -207,7 +212,7 @@ export default class Lyrics extends Command {
             client.logger.error(error);
         }
 
-        // --- 3. FORMATTING ---
+        // --- 3. FORMATTING HASIL ---
         try {
             let lyricsText: string | null = null;
             if (lyricsResult && typeof lyricsResult === "object" && Array.isArray((lyricsResult as LyricsResult).lines)) {
@@ -232,10 +237,11 @@ export default class Lyrics extends Command {
                 const lyricsPages = this.paginateLyrics(cleanedLyrics, ctx);
                 let currentPage = 0;
 
+                // --- FUNGSI MEMBUAT EMBED ---
                 const createLyricsEmbed = (pageIndex: number) => {
                     const embed = new EmbedBuilder()
                         .setColor(client.color.main)
-                        .setTitle(trackTitle.substring(0, 250))
+                        .setTitle(trackTitle.substring(0, 250)) // Judul Aman
                         .setURL(trackUrl.startsWith('http') ? trackUrl : null)
                         .setAuthor({ name: artistName.substring(0, 250) || "Unknown Artist" });
 
@@ -256,6 +262,7 @@ export default class Lyrics extends Command {
                     return embed;
                 };
 
+                // Tombol Navigasi
                 const getNavigationRow = (current: number) => {
                     return new ActionRowBuilder<ButtonBuilder>().addComponents(
                         new ButtonBuilder().setCustomId("prev").setEmoji(client.emoji.page.back).setStyle(ButtonStyle.Secondary).setDisabled(current === 0),
@@ -264,6 +271,7 @@ export default class Lyrics extends Command {
                     );
                 };
 
+                // Tombol Live Lyrics
                 const liveLyricsRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
                     new ButtonBuilder()
                         .setCustomId("lyrics_subscribe")
@@ -277,6 +285,7 @@ export default class Lyrics extends Command {
                         .setDisabled(!isSynced),
                 );
 
+                // Kirim Pesan Awal (Pakai EmbedBuilder, bukan Container)
                 await ctx.editMessage({
                     embeds: [createLyricsEmbed(currentPage)],
                     components: [getNavigationRow(currentPage), liveLyricsRow]
@@ -298,6 +307,7 @@ export default class Lyrics extends Command {
                             time: 60000,
                         });
 
+                        // HANDLE SUBSCRIBE (KARAOKE)
                         if (interaction.customId === "lyrics_subscribe") {
                             await interaction.reply({ content: getTxt("cmd.lyrics.subscribed", {}, "✅ Subscribed!"), flags: MessageFlags.Ephemeral });
                             
@@ -319,6 +329,7 @@ export default class Lyrics extends Command {
                                         
                                         if (currentIdx !== lastLine) {
                                             lastLine = currentIdx;
+                                            // Ambil 5 baris sekitar baris aktif agar rapi
                                             const startLine = Math.max(0, currentIdx - 2);
                                             const endLine = Math.min(lyricsLines.length, currentIdx + 4);
                                             
@@ -336,13 +347,14 @@ export default class Lyrics extends Command {
 
                                             await ctx.editMessage({ embeds: [liveEmbed], components: [liveLyricsRow] }).catch(() => running = false);
                                         }
-                                        await new Promise((res) => setTimeout(res, 1500));
+                                        await new Promise((res) => setTimeout(res, 1500)); // Update tiap 1.5 detik
                                     }
                                 })();
                             }
                             continue;
                         }
 
+                        // HANDLE UNSUBSCRIBE
                         if (interaction.customId === "lyrics_unsubscribe") {
                             running = false;
                             subscriptionActive = false;
@@ -354,6 +366,7 @@ export default class Lyrics extends Command {
                             continue;
                         }
 
+                        // HANDLE NAVIGASI
                         if (interaction.customId === "prev") {
                             currentPage--;
                         } else if (interaction.customId === "next") {
@@ -361,7 +374,7 @@ export default class Lyrics extends Command {
                         } else if (interaction.customId === "stop") {
                             collectorActive = false;
                             running = false;
-                            await interaction.update({ components: [] });
+                            await interaction.update({ components: [] }); // Hapus tombol
                             break;
                         }
 
@@ -377,6 +390,7 @@ export default class Lyrics extends Command {
                     }
                 }
 
+                // Cleanup Akhir
                 if (ctx.guild?.members.me?.permissionsIn(ctx.channelId).has("SendMessages")) {
                     await ctx.editMessage({ components: [] }).catch(() => null);
                 }
@@ -397,11 +411,12 @@ export default class Lyrics extends Command {
         }
     }
 
+    // --- UTILS ---
     paginateLyrics(lyrics: string, ctx: Context): string[] {
         const lines = lyrics.split("\n");
         const pages: string[] = [];
         let currentPage = "";
-        const MAX_CHARACTERS_PER_PAGE = 3000;
+        const MAX_CHARACTERS_PER_PAGE = 3000; // Embed Description max 4096, 3000 aman
 
         for (const line of lines) {
             const lineWithNewline = `${line}\n`;
