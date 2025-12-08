@@ -55,7 +55,6 @@ export default class Lyrics extends Command {
             ],
         });
 
-        // Setup Genius
         const token = process.env.GENIUS_API || process.env.GENIUS_API_KEY || process.env.GENIUS_TOKEN;
         this.geniusClient = new Client(token);
     }
@@ -118,60 +117,63 @@ export default class Lyrics extends Command {
         
         await ctx.sendDeferMessage({ embeds: [searchingEmbed] });
 
-        // --- 2. HYBRID FETCHING LOGIC ---
+        // --- FETCHING LOGIC ---
         try {
             const cleanTitle = this.cleanTitle(trackTitle);
             const isJp = this.isJapanese(trackTitle) || this.isJapanese(artistName);
 
-            // =========================================================
-            // A. GENIUS (ROMAJI) - MULTI-QUERY AGGRESSIVE MODE
-            // =========================================================
+            // =========================================================================
+            // A. ROMAJI FORCE (JIKA JEPANG) - COBA TEBAK URL & CARI KHUSUS
+            // =========================================================================
             if (isJp) {
-                // Daftar Query yang akan dicoba satu per satu
-                const queriesToTry = [
-                    `Genius Romanizations ${cleanTitle}`, // Coba 1: Artis Spesifik
-                    `${cleanTitle} Romanized`,            // Coba 2: Judul + Romanized
-                    `${cleanTitle} Romaji`,               // Coba 3: Judul + Romaji
-                    `${artistName} ${cleanTitle} Romanized` // Coba 4: Lengkap
-                ];
+                // Trik 1: Cari artis "Genius Romanizations"
+                try {
+                    const q = `Genius Romanizations ${cleanTitle}`;
+                    const searches = await this.geniusClient.songs.search(q);
+                    
+                    // Loop hasil, cari yang artisnya "Genius Romanizations"
+                    for (const s of searches) {
+                        if (s.artist.name.toLowerCase().includes("genius romanizations")) {
+                            lyricsResult = await s.lyrics();
+                            if (lyricsResult) {
+                                isSynced = false;
+                                trackTitle = s.title; // Pakai judul Romaji
+                                artistName = s.artist.name;
+                                artworkUrl = s.thumbnail;
+                                trackUrl = s.url;
+                                break;
+                            }
+                        }
+                    }
+                } catch(e) {}
 
-                for (const query of queriesToTry) {
-                    if (lyricsResult) break; // Jika sudah ketemu, berhenti loop
-
+                // Trik 2: Jika Trik 1 gagal, cari keyword "Romanized" dan ambil APAPUN yang ada kata itu
+                if (!lyricsResult) {
                     try {
-                        const searches = await this.geniusClient.songs.search(query);
-                        
-                        // SCAN SEMUA HASIL (Bukan cuma yang teratas)
+                        const q = `${cleanTitle} Romanized`;
+                        const searches = await this.geniusClient.songs.search(q);
                         for (const s of searches) {
-                            const t = s.title.toLowerCase();
-                            const a = s.artist.name.toLowerCase();
-                            
-                            // Kriteria ROMAJI:
-                            // 1. Artisnya "Genius Romanizations"
-                            // 2. ATAU Judul mengandung "Romanized" / "Romaji"
-                            const isRomanized = a.includes("genius romanizations") || t.includes("romanized") || t.includes("romaji");
-
-                            if (isRomanized) {
-                                const text = await s.lyrics();
-                                if (text && text.length > 10) {
-                                    lyricsResult = text;
+                            if (s.title.toLowerCase().includes("romanized") || s.fullTitle.toLowerCase().includes("romanized")) {
+                                lyricsResult = await s.lyrics();
+                                if (lyricsResult) {
                                     isSynced = false;
-                                    // Update Info agar sesuai Genius
                                     trackTitle = s.title;
                                     artistName = s.artist.name;
                                     artworkUrl = s.thumbnail;
-                                    // STOP SEMUA LOOP
+                                    trackUrl = s.url;
                                     break;
                                 }
                             }
                         }
-                    } catch (e) { /* Lanjut ke query berikutnya */ }
+                    } catch(e) {}
                 }
             }
 
-            // =========================================================
-            // B. PLUGIN LAVALINK (Synced - Backup 1)
-            // =========================================================
+            // =========================================================================
+            // B. NORMAL / PLUGIN FALLBACK
+            // =========================================================================
+            
+            // Cek Plugin Lavalink (Synced)
             if (!lyricsResult) {
                 try {
                     let res: LyricsResult | null = null;
@@ -184,40 +186,68 @@ export default class Lyrics extends Command {
 
                     if (res) {
                         lyricsResult = res;
-                        if (typeof res === 'object' && Array.isArray(res.lines) && res.lines.length > 0) {
-                            isSynced = true;
-                        } else {
-                            isSynced = false;
-                        }
+                        if (typeof res === 'object' && Array.isArray(res.lines) && res.lines.length > 0) isSynced = true;
                     }
                 } catch (e) { }
             }
 
-            // =========================================================
-            // C. GENIUS (NORMAL - Backup Terakhir)
-            // =========================================================
+            // Cek Genius Normal (Last Resort)
             if (!lyricsResult) {
                 try {
-                    const normalQuery = `${cleanTitle} ${artistName}`;
-                    const searches = await this.geniusClient.songs.search(normalQuery);
-                    
-                    // Loop sedikit untuk mencari yang paling relevan (hindari cover/remix jika bisa)
-                    for (const s of searches) {
-                        const t = s.title.toLowerCase();
-                        // Hindari instrumental atau remix jika pencarian utama gagal
-                        if (!t.includes("instrumental")) {
-                            const text = await s.lyrics();
-                            if (text && text.length > 10) {
-                                lyricsResult = text;
-                                isSynced = false;
-                                trackTitle = s.title;
-                                artistName = s.artist.name;
-                                artworkUrl = s.thumbnail;
-                                break;
-                            }
-                        }
+                    const searches = await this.geniusClient.songs.search(`${cleanTitle} ${artistName}`);
+                    if (searches.length > 0) {
+                        const s = searches[0];
+                        lyricsResult = await s.lyrics();
+                        isSynced = false;
+                        trackTitle = s.title;
+                        artistName = s.artist.name;
+                        artworkUrl = s.thumbnail;
+                        trackUrl = s.url;
                     }
                 } catch (e) { }
+            }
+
+            // =========================================================================
+            // C. FINAL CHECK: MASIH JEPANG? -> PAKSA "ROMANIZED"
+            // =========================================================================
+            // Ini untuk kasus seperti "D-tecnoLife" dimana Genius mungkin memberikan lirik asli 
+            // meskipun kita cari "Romanized" jika popularitasnya timpang.
+            
+            let currentText = "";
+            if (lyricsResult) {
+                if (typeof lyricsResult === "string") currentText = lyricsResult;
+                else if ((lyricsResult as any).lines) currentText = (lyricsResult as any).lines.map((l:any) => l.line).join(" ");
+                else if ((lyricsResult as any).text) currentText = (lyricsResult as any).text;
+            }
+
+            // Jika kita mendeteksi banyak Kanji/Kana di hasil lirik...
+            if (currentText && this.isJapanese(currentText)) {
+                // ...Coba cari lagi dengan keyword SUPER SPESIFIK untuk Romaji
+                // Kita abaikan hasil plugin, kita mau teks Romaji dari Genius
+                try {
+                    // Cari "D-tecnoLife Romanized" lagi tapi kali ini ambil hasil TERATAS yang mengandung "Romanized" di judul
+                    const q = `${cleanTitle} ${artistName} Romanized`;
+                    const searches = await this.geniusClient.songs.search(q);
+                    
+                    let bestMatch = null;
+                    for (const s of searches) {
+                        if (s.title.toLowerCase().includes("romanized") || s.artist.name.toLowerCase().includes("romanizations")) {
+                            bestMatch = s;
+                            break;
+                        }
+                    }
+
+                    if (bestMatch) {
+                        const newText = await bestMatch.lyrics();
+                        if (newText) {
+                            lyricsResult = newText;
+                            isSynced = false;
+                            trackTitle = bestMatch.title;
+                            trackUrl = bestMatch.url;
+                            artworkUrl = bestMatch.thumbnail;
+                        }
+                    }
+                } catch(e) {}
             }
 
         } catch (error) {
@@ -253,7 +283,7 @@ export default class Lyrics extends Command {
                     const embed = new EmbedBuilder()
                         .setColor(client.color.main)
                         .setTitle(trackTitle.substring(0, 250))
-                        .setURL(trackUrl.startsWith('http') ? trackUrl : null)
+                        .setURL(trackUrl.startsWith('http') ? trackUrl : null) // Link Genius Valid
                         .setAuthor({ name: artistName.substring(0, 250) || "Unknown Artist" });
 
                     if (this.isValidUrl(artworkUrl)) {
@@ -335,12 +365,9 @@ export default class Lyrics extends Command {
                                         
                                         if (currentIdx !== lastLine) {
                                             lastLine = currentIdx;
-                                            const startLine = Math.max(0, currentIdx - 2);
-                                            const endLine = Math.min(lyricsLines.length, currentIdx + 4);
-                                            
-                                            const formatted = lyricsLines.slice(startLine, endLine)
+                                            const formatted = lyricsLines.slice(Math.max(0, currentIdx - 2), Math.min(lyricsLines.length, currentIdx + 4))
                                                 .map((l, idx) => {
-                                                    const realIdx = startLine + idx;
+                                                    const realIdx = Math.max(0, currentIdx - 2) + idx;
                                                     return realIdx === currentIdx ? `**__${l.line}__**` : l.line;
                                                 }).join("\n");
                                             
