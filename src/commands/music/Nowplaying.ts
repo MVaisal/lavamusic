@@ -53,15 +53,14 @@ export default class Nowplaying extends Command {
             return ctx.sendMessage({ embeds: [embed] });
         }
 
-        // --- [LOGIKA AMBIL ALIH UPDATE] ---
-        // 1. Matikan update di pesan lama (TrackStart atau NowPlaying sebelumnya)
+        // --- [LOGIKA HAPUS TOMBOL & INTERVAL LAMA] ---
+        // Matikan update otomatis dari pesan sebelumnya
         const oldInterval = player.get("autoUpdateInterval");
         if (oldInterval) {
             clearInterval(oldInterval as NodeJS.Timeout);
         }
 
-        // --- [UBAHAN: HAPUS TOMBOL PESAN LAMA] ---
-        // Kita ambil pesan yang tersimpan di player, dan hapus komponen tombolnya
+        // Hapus tombol dari pesan sebelumnya (TrackStart atau NowPlaying lama)
         const oldMessage = player.get("nowPlayingMessage");
         if (oldMessage) {
             try {
@@ -70,7 +69,7 @@ export default class Nowplaying extends Command {
                 // Abaikan jika pesan sudah terhapus
             }
         }
-        // -----------------------------------------
+        // ---------------------------------------------
 
         const track = player.queue.current;
         const duration = track.info.duration;
@@ -85,7 +84,10 @@ export default class Nowplaying extends Command {
             .setColor(this.client.color.main)
             .setAuthor({
                 name: ctx.locale("cmd.nowplaying.now_playing"),
-                iconURL: ctx.author.displayAvatarURL()
+                // [UBAHAN DISINI]
+                // Menggunakan icon source (Spotify/Youtube) bukan avatar user
+                // Jika icon source tidak ketemu, fallback ke avatar bot
+                iconURL: client.config.icons[track.info.sourceName] ?? client.user?.displayAvatarURL({ extension: "png" })
             })
             .setDescription(`**[${track.info.title}](${track.info.uri ?? ""})**\n\n${progressBar}\n${durationText}`)
             .setThumbnail(track.info.artworkUrl ?? null)
@@ -123,15 +125,13 @@ export default class Nowplaying extends Command {
             components: components
         });
 
-        // --- [UBAHAN: SIMPAN PESAN BARU] ---
-        // Simpan pesan ini agar tombolnya bisa dihapus oleh TrackStart berikutnya
+        // --- [SIMPAN PESAN BARU KE PLAYER] ---
+        // Simpan pesan ini agar tombolnya bisa dihapus nanti
         player.set("nowPlayingMessage", message);
-        // -----------------------------------
+        // -------------------------------------
 
-        // --- [LOGIKA UPDATE BARU] ---
-        // 2. Buat Interval baru untuk pesan ini
+        // --- [SETUP INTERVAL UPDATE BARU] ---
         const newInterval = setInterval(async () => {
-            // Cek validitas player
             if (!player || !player.queue.current || player.queue.current.info.uri !== track.info.uri) {
                 clearInterval(newInterval);
                 return;
@@ -139,7 +139,6 @@ export default class Nowplaying extends Command {
             if (player.paused) return;
 
             try {
-                // Update Bar
                 const currentPos = player.position;
                 const newBar = client.utils.progressBar(currentPos, duration, 20);
                 const newTimeText = track.info.isStream ? "🔴 LIVE" : `\`${client.utils.formatTime(currentPos)} / ${client.utils.formatTime(duration)}\``;
@@ -152,9 +151,8 @@ export default class Nowplaying extends Command {
             }
         }, 30000); // Update tiap 30 detik
 
-        // 3. Simpan Interval baru ke player agar bisa dimatikan nanti
         player.set("autoUpdateInterval", newInterval);
-        // ----------------------------
+        // ------------------------------------
 
         // Button Collector
         const collector = message.createMessageComponentCollector({
@@ -167,13 +165,11 @@ export default class Nowplaying extends Command {
                 return false;
             },
             componentType: ComponentType.Button,
-            time: 300000 // 5 Menit aktif
+            time: 300000 // 5 Menit
         });
 
         collector.on("collect", async (interaction: ButtonInteraction) => {
-            // Update embed function for buttons
             const updateComponents = async () => {
-                // Saat tombol diklik, kita juga update progress bar agar terasa responsif
                 const currPos = player.position;
                 const barNow = client.utils.progressBar(currPos, duration, 20);
                 const timeNow = `\`${client.utils.formatTime(currPos)} / ${client.utils.formatTime(duration)}\``;
@@ -200,7 +196,6 @@ export default class Nowplaying extends Command {
                     player.stopPlaying(true, false);
                     await interaction.deferUpdate();
                     await updateComponents();
-                    // Clear interval if stopped
                     clearInterval(newInterval);
                     break;
 
@@ -239,7 +234,6 @@ export default class Nowplaying extends Command {
         });
 
         collector.on("end", () => {
-            // Saat collector mati (5 menit), kita matikan juga auto-update untuk menghemat resource
             clearInterval(newInterval);
             if (message.editable) {
                 message.edit({ components: [] }).catch(() => null);
