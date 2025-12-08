@@ -10,7 +10,7 @@ import {
 } from "discord.js";
 import { Command, type Context, type Lavamusic } from "../../structures/index";
 import { LyricsLine, LyricsResult } from "lavalink-client";
-import Client from "genius-lyrics"; // Import Library Genius
+import { Client } from "genius-lyrics"; // [FIX] Menggunakan Named Import agar tidak error constructor
 
 export default class Lyrics extends Command {
 	private geniusClient: Client;
@@ -551,9 +551,6 @@ export default class Lyrics extends Command {
 			});
 		}
 	}
-
-	// fetchTrackAndLyrics tidak lagi dipakai karena sudah digabung ke dalam run() untuk hybrid logic, 
-	// tapi method paginateLyrics & cleanLyrics tetap dipakai.
 
 	paginateLyrics(lyrics: string, ctx: Context): string[] {
 		const lines = lyrics.split("\n");
