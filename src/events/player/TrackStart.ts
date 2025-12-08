@@ -50,7 +50,7 @@ class TrackStart extends import_structures.Event {
     const oldInterval = player.get("autoUpdateInterval");
     if (oldInterval) clearInterval(oldInterval);
 
-    // --- [UBAHAN: HAPUS TOMBOL PESAN LAMA] ---
+    // --- [LOGIKA HAPUS TOMBOL PESAN LAMA] ---
     // Kita cek apakah ada pesan nowPlayingMessage (dari track sebelumnya atau command NP)
     // Jika ada, kita hapus tombolnya supaya tidak ada double button.
     const oldMessage = player.get("nowPlayingMessage");
@@ -138,8 +138,8 @@ class TrackStart extends import_structures.Event {
             components: createButtonRow(player, this.client)
         });
         
-        // --- [UBAHAN: SIMPAN OBJECT PESAN] ---
-        // Kita simpan seluruh pesan, bukan cuma ID, agar bisa diedit (hapus tombol) oleh command NP
+        // --- [SIMPAN OBJECT PESAN] ---
+        // Kita simpan seluruh pesan, bukan cuma ID, agar bisa diedit (hapus tombol) oleh command NP/Stop
         player.set("nowPlayingMessage", message);
         // -------------------------------------
 
@@ -265,6 +265,8 @@ function createCollector(message, player, _track, embed, client, locale) {
       case "stop": {
         player.stopPlaying(true, false);
         await interaction.deferUpdate();
+        // [UBAHAN] Hapus tombol langsung saat tombol stop diklik
+        await message.edit({ components: [] });
         break;
       }
       case "skip":

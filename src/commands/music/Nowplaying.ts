@@ -84,9 +84,7 @@ export default class Nowplaying extends Command {
             .setColor(this.client.color.main)
             .setAuthor({
                 name: ctx.locale("cmd.nowplaying.now_playing"),
-                // [UBAHAN DISINI]
                 // Menggunakan icon source (Spotify/Youtube) bukan avatar user
-                // Jika icon source tidak ketemu, fallback ke avatar bot
                 iconURL: client.config.icons[track.info.sourceName] ?? client.user?.displayAvatarURL({ extension: "png" })
             })
             .setDescription(`**[${track.info.title}](${track.info.uri ?? ""})**\n\n${progressBar}\n${durationText}`)
@@ -195,7 +193,8 @@ export default class Nowplaying extends Command {
                 case "stop":
                     player.stopPlaying(true, false);
                     await interaction.deferUpdate();
-                    await updateComponents();
+                    // [UBAHAN] Hapus tombol di nowplaying saat stop diklik
+                    await interaction.editReply({ components: [] }); 
                     clearInterval(newInterval);
                     break;
 
