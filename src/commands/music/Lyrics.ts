@@ -1,494 +1,556 @@
 import {
-    ActionRowBuilder,
-    ButtonBuilder,
-    type ButtonInteraction,
-    ButtonStyle,
-    ComponentType,
-    EmbedBuilder,
-    MessageFlags,
+	ActionRowBuilder,
+	ButtonBuilder,
+	type ButtonInteraction,
+	ButtonStyle,
+	ComponentType,
+	ContainerBuilder,
+	MessageFlags,
+	SectionBuilder,
 } from "discord.js";
 import { Command, type Context, type Lavamusic } from "../../structures/index";
 import { LyricsLine, LyricsResult } from "lavalink-client";
-import { Client } from "genius-lyrics";
 
 export default class Lyrics extends Command {
-    private geniusClient: Client;
+	constructor(client: Lavamusic) {
+		super(client, {
+			name: "lyrics",
+			description: {
+				content: "cmd.lyrics.description",
+				examples: ["lyrics", "lyrics song:Imagine Dragons - Believer"],
+				usage: "lyrics [song]",
+			},
+			category: "music",
+			aliases: ["ly"],
+			cooldown: 3,
+			args: false,
+			vote: false,
+			player: {
+				voice: true,
+				dj: false,
+				active: false,
+				djPerm: null,
+			},
+			permissions: {
+				dev: false,
+				client: [
+					"SendMessages",
+					"ReadMessageHistory",
+					"ViewChannel",
+					"EmbedLinks",
+					"AttachFiles",
+				],
+				user: [],
+			},
+			slashCommand: true,
+			options: [
+				{
+					name: "song",
+					description: "cmd.lyrics.options.song.description",
+					type: 3,
+					required: false,
+				},
+			],
+		});
+	}
 
-    constructor(client: Lavamusic) {
-        super(client, {
-            name: "lyrics",
-            description: {
-                content: "cmd.lyrics.description",
-                examples: ["lyrics", "lyrics song:Imagine Dragons - Believer"],
-                usage: "lyrics [song]",
-            },
-            category: "music",
-            aliases: ["ly"],
-            cooldown: 3,
-            args: false,
-            vote: false,
-            player: {
-                voice: true,
-                dj: false,
-                active: false,
-                djPerm: null,
-            },
-            permissions: {
-                dev: false,
-                client: [
-                    "SendMessages",
-                    "ReadMessageHistory",
-                    "ViewChannel",
-                    "EmbedLinks",
-                    "AttachFiles",
-                ],
-                user: [],
-            },
-            slashCommand: true,
-            options: [
-                {
-                    name: "song",
-                    description: "cmd.lyrics.options.song.description",
-                    type: 3,
-                    required: false,
-                },
-            ],
-        });
+	public async run(client: Lavamusic, ctx: Context): Promise<any> {
+		// Get the song query from options or arguments
+		let songQuery = "";
+		if (ctx.options && typeof ctx.options.get === "function") {
+			let songOpt = null;
+			try {
+				songOpt = ctx.options.get("song");
+			} catch (e) {
+				songOpt = null;
+			}
+			if (songOpt && typeof songOpt.value === "string") {
+				songQuery = songOpt.value;
+			}
+		}
+		if (!songQuery && ctx.args?.[0]) {
+			songQuery = ctx.args[0];
+		}
 
-        const token = process.env.GENIUS_API || process.env.GENIUS_API_KEY || process.env.GENIUS_TOKEN;
-        this.geniusClient = new Client(token);
-    }
+		const player = client.manager.getPlayer(ctx.guild!.id);
 
-    public async run(client: Lavamusic, ctx: Context): Promise<any> {
-        let songQuery = "";
-        if (ctx.options && typeof ctx.options.get === "function") {
-            const songOpt = ctx.options.get("song");
-            if (songOpt && typeof songOpt.value === "string") songQuery = songOpt.value;
-        }
-        if (!songQuery && ctx.args?.[0]) {
-            songQuery = ctx.args.join(" ");
-        }
+		// If there is no player and no song title is given, lyrics cannot be fetched
+		if (!songQuery && !player) {
+			const noMusicContainer = new ContainerBuilder()
+				.setAccentColor(client.color.red)
+				.addTextDisplayComponents((textDisplay) =>
+					textDisplay.setContent(ctx.locale("event.message.no_music_playing")),
+				);
+			return ctx.sendMessage({
+				components: [noMusicContainer],
+				flags: MessageFlags.IsComponentsV2,
+			});
+		}
+		// If songQuery is given, fetch lyrics for the specified song
+		let trackTitle = "";
+		let artistName = "";
+		let trackUrl = "";
+		let artworkUrl = "";
+		let lyricsResult: LyricsResult | string = "";
+		if (songQuery) {
+			const result = await this.fetchTrackAndLyrics({
+				client,
+				ctx,
+				songQuery,
+				player,
+			});
+			if (!result) return;
+			lyricsResult = result.lyricsResult;
+			trackTitle = result.trackTitle;
+			artistName = result.artistName;
+			trackUrl = result.trackUrl;
+			artworkUrl = result.artworkUrl;
+		} else if (player && player.queue.current) {
+			// If no songquery is given, fetch lyrics for the currently playing song
+			lyricsResult = await player.getCurrentLyrics(false);
+			const track = player.queue.current;
+			trackTitle =
+				(track.info.title
+					?.replace(/\[.*?]|\(.*?\)|{.*?}/g, "")
+					.trim() as string) || "Unknown Title";
+			artistName =
+				(track.info.author
+					?.replace(/\[.*?]|\(.*?\)|{.*?}/g, "")
+					.trim() as string) || "Unknown Artist";
+			trackUrl = track.info.uri ?? "about:blank";
+			artworkUrl = track.info.artworkUrl || "";
+		}
 
-        const player = client.manager.getPlayer(ctx.guild!.id);
+		const searchingContainer = new ContainerBuilder()
+			.setAccentColor(client.color.main)
+			.addTextDisplayComponents((textDisplay) =>
+				textDisplay.setContent(
+					ctx.locale("cmd.lyrics.searching", { trackTitle }),
+				),
+			);
 
-        const getTxt = (key: string, args?: any, defaultTxt?: string) => {
-            const res = ctx.locale(key, args);
-            return res && res !== key ? res : (defaultTxt || "Unknown Text");
-        };
+		await ctx.sendDeferMessage({
+			components: [searchingContainer],
+			flags: MessageFlags.IsComponentsV2,
+		});
 
-        if (!songQuery && !player) {
-            const embed = new EmbedBuilder()
-                .setColor(client.color.red)
-                .setDescription(getTxt("event.message.no_music_playing", {}, "❌ No music playing."));
-            return ctx.sendMessage({ embeds: [embed] });
-        }
+		try {
+			// Handle lyricsResult as an object with lines (Musixmatch, Spotify, etc.)
+			let lyricsText: string | null = null;
+			if (
+				lyricsResult &&
+				typeof lyricsResult === "object" &&
+				Array.isArray((lyricsResult as LyricsResult).lines)
+			) {
+				lyricsText = (lyricsResult as LyricsResult)
+					.lines!.map((l: LyricsLine) => l.line)
+					.join("\n");
+			} else if (typeof lyricsResult === "string") {
+				lyricsText = lyricsResult;
+			}
+			if (!lyricsText || lyricsText.length < 10) {
+				const noResultsContainer = new ContainerBuilder()
+					.setAccentColor(client.color.red)
+					.addTextDisplayComponents((textDisplay) =>
+						textDisplay.setContent(ctx.locale("cmd.lyrics.errors.no_results")),
+					);
+				await ctx.editMessage({
+					components: [noResultsContainer],
+					flags: MessageFlags.IsComponentsV2,
+				});
+				return;
+			}
+			const cleanedLyrics = this.cleanLyrics(lyricsText);
 
-        let trackTitle = "";
-        let artistName = "";
-        // URL Default (YouTube/Spotify)
-        let originalUrl = ""; 
-        // URL Final untuk Embed (Akan diganti Genius jika ketemu)
-        let displayUrl = ""; 
-        let artworkUrl = "";
-        let lyricsResult: LyricsResult | string | null = null;
-        let isSynced = false;
+			if (cleanedLyrics && cleanedLyrics.length > 0) {
+				const lyricsPages = this.paginateLyrics(cleanedLyrics, ctx);
+				let currentPage = 0;
 
-        let targetTrack: any = null;
+				const createLyricsContainer = (
+					pageIndex: number,
+					finalState: boolean = false,
+				) => {
+					const currentLyricsPage =
+						lyricsPages[pageIndex] ||
+						ctx.locale("cmd.lyrics.no_lyrics_on_page");
 
-        if (songQuery) {
-            const searchRes = await client.manager.search(songQuery, ctx.author);
-            if (searchRes.tracks.length > 0) targetTrack = searchRes.tracks[0];
-        } else if (player && player.queue.current) {
-            targetTrack = player.queue.current;
-        }
+					let fullContent =
+						ctx.locale("cmd.lyrics.lyrics_for_track", {
+							trackTitle: trackTitle,
+							trackUrl: trackUrl,
+						}) +
+						"\n" +
+						(artistName ? `*${artistName}*\n\n` : "") +
+						`${currentLyricsPage}`;
 
-        if (!targetTrack) {
-            const embed = new EmbedBuilder()
-                .setColor(client.color.red)
-                .setDescription(getTxt("cmd.lyrics.errors.no_results", {}, "❌ No results found."));
-            return ctx.sendMessage({ embeds: [embed] });
-        }
+					if (!finalState) {
+						fullContent += `\n\n${ctx.locale("cmd.lyrics.page_indicator", {
+							current: pageIndex + 1,
+							total: lyricsPages.length,
+						})}`;
+					} else {
+						fullContent += `\n\n*${ctx.locale("cmd.lyrics.session_expired")}*`;
+					}
 
-        trackTitle = targetTrack.info.title || "Unknown Title";
-        artistName = targetTrack.info.author || "Unknown Artist";
-        originalUrl = targetTrack.info.uri || "";
-        displayUrl = originalUrl; // Default ke link asli
-        artworkUrl = targetTrack.info.artworkUrl || "";
+					const mainLyricsSection =
+						new SectionBuilder().addTextDisplayComponents((textDisplay) =>
+							textDisplay.setContent(fullContent),
+						);
 
-        const searchingEmbed = new EmbedBuilder()
-            .setColor(client.color.main)
-            .setDescription(`🔎 ${getTxt("cmd.lyrics.searching", { trackTitle: trackTitle }, `Searching lyrics for **${trackTitle}**...`)}`);
-        
-        await ctx.sendDeferMessage({ embeds: [searchingEmbed] });
+					if (artworkUrl && artworkUrl.length > 0) {
+						mainLyricsSection.setThumbnailAccessory((thumbnail) =>
+							thumbnail
+								.setURL(artworkUrl)
+								.setDescription(
+									ctx.locale("cmd.lyrics.artwork_description", { trackTitle }),
+								),
+						);
+					}
 
-        // --- FETCHING LOGIC ---
-        try {
-            const cleanTitle = this.cleanTitle(trackTitle);
-            const isJp = this.isJapanese(trackTitle) || this.isJapanese(artistName);
+					return new ContainerBuilder()
+						.setAccentColor(client.color.main)
+						.addSectionComponents(mainLyricsSection);
+				};
 
-            // 1. CARI ROMAJI (PRIORITAS TERTINGGI)
-            if (isJp) {
-                const romajiData = await this.findGeniusRomaji(cleanTitle, artistName);
-                if (romajiData) {
-                    lyricsResult = romajiData.text;
-                    isSynced = false;
-                    
-                    // Update Metadata ke Genius Romaji
-                    trackTitle = romajiData.title;
-                    artistName = romajiData.artist; // Akan jadi "Genius Romanizations"
-                    artworkUrl = romajiData.image;
-                    displayUrl = romajiData.url; // Link Biru -> Genius
-                }
-            }
+				const getNavigationRow = (current: number) => {
+					return new ActionRowBuilder<ButtonBuilder>().addComponents(
+						new ButtonBuilder()
+							.setCustomId("prev")
+							.setEmoji(client.emoji.page.back)
+							.setStyle(ButtonStyle.Secondary)
+							.setDisabled(current === 0),
+						new ButtonBuilder()
+							.setCustomId("stop")
+							.setEmoji(client.emoji.page.cancel)
+							.setStyle(ButtonStyle.Danger),
+						new ButtonBuilder()
+							.setCustomId("next")
+							.setEmoji(client.emoji.page.next)
+							.setStyle(ButtonStyle.Secondary)
+							.setDisabled(current === lyricsPages.length - 1),
+					);
+				};
 
-            // 2. JIKA GAGAL, CEK PLUGIN (Untuk Synced Lyrics)
-            if (!lyricsResult) {
-                try {
-                    let res: LyricsResult | null = null;
-                    if (player && player.queue.current?.info.uri === targetTrack.info.uri) {
-                        res = await player.getCurrentLyrics(false);
-                    } else {
-                        const node = client.manager.nodeManager.leastUsedNodes()[0];
-                        res = await node.lyrics.get(targetTrack, true);
-                    }
+				// Add subscribe/unsubscribe buttons to lyrics
+				const liveLyricsRow =
+					new ActionRowBuilder<ButtonBuilder>().addComponents(
+						new ButtonBuilder()
+							.setCustomId("lyrics_subscribe")
+							.setLabel(ctx.locale("cmd.lyrics.button_subscribe"))
+							.setStyle(ButtonStyle.Success),
+						new ButtonBuilder()
+							.setCustomId("lyrics_unsubscribe")
+							.setLabel(ctx.locale("cmd.lyrics.button_unsubscribe"))
+							.setStyle(ButtonStyle.Danger),
+					);
 
-                    if (res) {
-                        lyricsResult = res;
-                        if (typeof res === 'object' && Array.isArray(res.lines) && res.lines.length > 0) isSynced = true;
-                    }
-                } catch (e) { }
-            }
+				await ctx.editMessage({
+					components: [
+						createLyricsContainer(currentPage),
+						getNavigationRow(currentPage),
+						liveLyricsRow,
+					],
+					flags: MessageFlags.IsComponentsV2,
+				});
 
-            // 3. JIKA MASIH GAGAL, CEK GENIUS NORMAL
-            if (!lyricsResult) {
-                try {
-                    const searches = await this.geniusClient.songs.search(`${cleanTitle} ${artistName}`);
-                    if (searches.length > 0) {
-                        const s = searches[0];
-                        const text = await s.lyrics();
-                        if (text && text.length > 10) {
-                            lyricsResult = text;
-                            isSynced = false;
-                            
-                            // Update Metadata ke Genius Normal
-                            trackTitle = s.title;
-                            artistName = s.artist.name;
-                            artworkUrl = s.thumbnail;
-                            displayUrl = s.url; // Link Biru -> Genius
-                        }
-                    }
-                } catch (e) { }
-            }
+				const filter = (interaction: ButtonInteraction<"cached">) =>
+					interaction.user.id === ctx.author?.id;
+				let collectorActive = true;
+				let running = false;
+				let lyricsUpdater: Promise<void> | null = null;
+				let lastLine = -1;
+				let subscriptionActive = false;
+				while (collectorActive) {
+					try {
+						const interaction = await ctx.channel.awaitMessageComponent({
+							filter,
+							componentType: ComponentType.Button,
+							time: 60000,
+						});
+						if (interaction.customId === "lyrics_subscribe") {
+							await interaction.reply({
+								content: ctx.locale("cmd.lyrics.subscribed"),
+								flags: MessageFlags.Ephemeral,
+							});
+							running = true;
+							subscriptionActive = true;
+							const maxTime = Date.now() + 3 * 60 * 1000;
+							const lyricsLines = (lyricsResult as LyricsResult).lines!;
+							lyricsUpdater = (async () => {
+								while (running && Date.now() < maxTime) {
+									if (!player || !player.playing) break;
+									const position = player.position;
+									let currentIdx = lyricsLines.findIndex((l) => {
+										const time =
+											(l as any).startTime ??
+											(l as any).time ??
+											(l as any).timestamp;
+										return typeof time === "number" && time > position;
+									});
+									if (currentIdx === -1) currentIdx = lyricsLines.length - 1;
+									else if (currentIdx > 0) currentIdx--;
+									if (currentIdx !== lastLine) {
+										lastLine = currentIdx;
+										const formatted = lyricsLines
+											.map((l, i) =>
+												i === currentIdx ? `**${l.line}**` : l.line,
+											)
+											.join("\n");
+										const liveLyricsContainer = new ContainerBuilder()
+											.setAccentColor(client.color.main)
+											.addTextDisplayComponents((textDisplay) =>
+												textDisplay.setContent(
+													ctx.locale("cmd.lyrics.lyrics_for_track", {
+														trackTitle,
+														trackUrl,
+													}) +
+														"\n" +
+														(artistName ? `*${artistName}*\n\n` : "") +
+														formatted,
+												),
+											);
+										await ctx.editMessage({
+											components: [liveLyricsContainer, liveLyricsRow],
+											flags: MessageFlags.IsComponentsV2,
+										});
+									}
+									await new Promise((res) => setTimeout(res, 1000));
+								}
+							})();
+							continue;
+						}
+						if (interaction.customId === "lyrics_unsubscribe") {
+							running = false;
+							subscriptionActive = false;
+							const lyricsLines = (lyricsResult as any).lines as LyricsLine[];
+							const formatted = lyricsLines.map((l) => l.line).join("\n");
+							const unsubLyricsContainer = new ContainerBuilder()
+								.setAccentColor(client.color.main)
+								.addTextDisplayComponents((textDisplay) =>
+									textDisplay.setContent(
+										ctx.locale("cmd.lyrics.lyrics_for_track", {
+											trackTitle,
+											trackUrl,
+										}) +
+											"\n" +
+											(artistName ? `*${artistName}*\n\n` : "") +
+											formatted +
+											`\n\n*${ctx.locale("cmd.lyrics.unsubscribed")}*`,
+									),
+								);
+							await interaction.update({
+								components: [
+									unsubLyricsContainer,
+									getNavigationRow(currentPage),
+									liveLyricsRow,
+								],
+							});
+							await interaction.reply({
+								content: ctx.locale("cmd.lyrics.unsubscribed"),
+								flags: MessageFlags.Ephemeral,
+							});
+							if (lyricsUpdater) await lyricsUpdater;
+							continue;
+						}
+						if (interaction.customId === "prev") {
+							currentPage--;
+						} else if (interaction.customId === "next") {
+							currentPage++;
+						} else if (interaction.customId === "stop") {
+							collectorActive = false;
+							running = false;
+							await interaction.update({
+								components: [
+									createLyricsContainer(currentPage, true),
+									getNavigationRow(currentPage),
+								],
+							});
+							break;
+						}
+						// If subscription is active, do not show navigation buttons
+						if (subscriptionActive) {
+							await interaction.update({
+								components: [createLyricsContainer(currentPage), liveLyricsRow],
+							});
+						} else {
+							await interaction.update({
+								components: [
+									createLyricsContainer(currentPage),
+									getNavigationRow(currentPage),
+									liveLyricsRow,
+								],
+							});
+						}
+					} catch (e) {
+						collectorActive = false;
+					}
+				}
+				// After collecting is finished
+				if (
+					ctx.guild?.members.me
+						?.permissionsIn(ctx.channelId)
+						.has("SendMessages")
+				) {
+					const finalContainer = createLyricsContainer(currentPage, true);
+					// Deactivate subscription buttons after the song ends
+					const disabledLiveLyricsRow =
+						new ActionRowBuilder<ButtonBuilder>().addComponents(
+							new ButtonBuilder()
+								.setCustomId("lyrics_subscribe")
+								.setLabel(ctx.locale("cmd.lyrics.button_subscribe"))
+								.setStyle(ButtonStyle.Success)
+								.setDisabled(true),
+							new ButtonBuilder()
+								.setCustomId("lyrics_unsubscribe")
+								.setLabel(ctx.locale("cmd.lyrics.button_unsubscribe"))
+								.setStyle(ButtonStyle.Danger)
+								.setDisabled(true),
+						);
+					await ctx
+						.editMessage({
+							components: [finalContainer, disabledLiveLyricsRow],
+							flags: MessageFlags.IsComponentsV2,
+						})
+						.catch((e) => {
+							if (e?.code !== 10008) {
+								client.logger.error("Failed to clear lyrics buttons:", e);
+							}
+						});
+				}
+			} else {
+				const noResultsContainer = new ContainerBuilder()
+					.setAccentColor(client.color.red)
+					.addTextDisplayComponents((textDisplay) =>
+						textDisplay.setContent(ctx.locale("cmd.lyrics.errors.no_results")),
+					);
+				await ctx.editMessage({
+					components: [noResultsContainer],
+					flags: MessageFlags.IsComponentsV2,
+				});
+			}
+		} catch (error) {
+			client.logger.error(error);
+			const errorContainer = new ContainerBuilder()
+				.setAccentColor(client.color.red)
+				.addTextDisplayComponents((textDisplay) =>
+					textDisplay.setContent(ctx.locale("cmd.lyrics.errors.lyrics_error")),
+				);
+			await ctx.editMessage({
+				components: [errorContainer],
+				flags: MessageFlags.IsComponentsV2,
+			});
+		}
+	}
 
-            // 4. PENGECEKAN AKHIR: APAKAH HASILNYA MASIH KANJI?
-            // (Untuk kasus di mana plugin memberikan lirik Jepang, atau Genius Normal memberikan lirik Jepang)
-            let currentText = "";
-            if (lyricsResult) {
-                if (typeof lyricsResult === "string") currentText = lyricsResult;
-                else if ((lyricsResult as any).lines) currentText = (lyricsResult as any).lines.map((l:any) => l.line).join(" ");
-                else if ((lyricsResult as any).text) currentText = (lyricsResult as any).text;
-            }
+	async fetchTrackAndLyrics({
+		client,
+		ctx,
+		songQuery,
+		player,
+	}: {
+		client: Lavamusic;
+		ctx: Context;
+		songQuery: string;
+		player?: any; // Use proper player type from lavalink-client
+	}) {
+		let trackTitle = "";
+		let artistName = "";
+		let trackUrl = "";
+		let artworkUrl = "";
+		let lyricsResult: LyricsResult | string = "";
 
-            if (currentText && this.isJapanese(currentText)) {
-                // Paksa cari Romaji sekali lagi dengan metode brute force
-                const forcedRomaji = await this.findGeniusRomaji(cleanTitle, artistName);
-                if (forcedRomaji) {
-                    lyricsResult = forcedRomaji.text;
-                    isSynced = false;
-                    trackTitle = forcedRomaji.title;
-                    artistName = forcedRomaji.artist;
-                    artworkUrl = forcedRomaji.image;
-                    displayUrl = forcedRomaji.url;
-                }
-            }
+		const searchRes = await client.manager.search(
+			songQuery,
+			ctx.author,
+			undefined,
+		);
+		const track = searchRes.tracks[0];
+		if (!track) {
+			const noResultsContainer = new ContainerBuilder()
+				.setAccentColor(client.color.red)
+				.addTextDisplayComponents((textDisplay) =>
+					textDisplay.setContent(ctx.locale("cmd.lyrics.errors.no_results")),
+				);
+			await ctx.editMessage({
+				components: [noResultsContainer],
+				flags: MessageFlags.IsComponentsV2,
+			});
+			return null;
+		}
+		try {
+			if (!player) {
+				const node = client.manager.nodeManager.leastUsedNodes()[0];
+				const result = await node.lyrics.get(track, true);
+				lyricsResult = result ?? "";
+			} else {
+				lyricsResult = await player.getLyrics(track, true);
+			}
+		} catch (err) {
+			if (client.logger && typeof client.logger.error === "function") {
+				client.logger.error(`[LYRICS] Error fetching lyrics: ${err}`);
+			}
+			throw err;
+		}
+		trackTitle = track.info.title;
+		artistName = track.info.author;
+		trackUrl = track.info.uri;
+		artworkUrl = track.info.artworkUrl || "";
 
-        } catch (error) {
-            client.logger.error(error);
-        }
+		return { lyricsResult, trackTitle, artistName, trackUrl, artworkUrl };
+	}
 
-        // --- FORMATTING (EMBED BUILDER) ---
-        try {
-            let lyricsText: string | null = null;
-            if (lyricsResult && typeof lyricsResult === "object" && Array.isArray((lyricsResult as LyricsResult).lines)) {
-                lyricsText = (lyricsResult as LyricsResult).lines!.map((l: LyricsLine) => l.line).join("\n");
-            } else if (typeof lyricsResult === "object" && (lyricsResult as any).text) {
-                lyricsText = (lyricsResult as any).text;
-            } else if (typeof lyricsResult === "string") {
-                lyricsText = lyricsResult;
-            }
+	paginateLyrics(lyrics: string, ctx: Context): string[] {
+		const lines = lyrics.split("\n");
+		const pages: string[] = [];
+		let currentPage = "";
+		const MAX_CHARACTERS_PER_PAGE = 2800;
 
-            if (!lyricsText || lyricsText.length < 10) {
-                const embed = new EmbedBuilder()
-                    .setColor(client.color.red)
-                    .setDescription(getTxt("cmd.lyrics.errors.no_results", {}, "❌ No lyrics found."));
-                await ctx.editMessage({ embeds: [embed], components: [] });
-                return;
-            }
+		for (const line of lines) {
+			const lineWithNewline = `${line}\n`;
 
-            const cleanedLyrics = this.cleanLyrics(lyricsText);
+			if (
+				currentPage.length + lineWithNewline.length >
+				MAX_CHARACTERS_PER_PAGE
+			) {
+				if (currentPage.trim()) {
+					pages.push(currentPage.trim());
+				}
+				currentPage = lineWithNewline;
+			} else {
+				currentPage += lineWithNewline;
+			}
+		}
 
-            if (cleanedLyrics && cleanedLyrics.length > 0) {
-                const lyricsPages = this.paginateLyrics(cleanedLyrics, ctx);
-                let currentPage = 0;
+		if (currentPage.trim()) {
+			pages.push(currentPage.trim());
+		}
 
-                const createLyricsEmbed = (pageIndex: number) => {
-                    const embed = new EmbedBuilder()
-                        .setColor(client.color.main)
-                        .setTitle(trackTitle.substring(0, 250))
-                        .setURL(displayUrl) // INI KUNCINYA: Link Biru mengarah ke displayUrl (Genius)
-                        .setAuthor({ name: artistName.substring(0, 250) || "Unknown Artist" });
+		if (pages.length === 0) {
+			pages.push(ctx.locale("cmd.lyrics.no_lyrics_available"));
+		}
 
-                    if (this.isValidUrl(artworkUrl)) {
-                        embed.setThumbnail(artworkUrl);
-                    }
+		return pages;
+	}
 
-                    const pageContent = lyricsPages[pageIndex] || "No lyrics on this page.";
-                    embed.setDescription(pageContent);
-
-                    const footerText = getTxt("cmd.lyrics.page_indicator", {
-                        current: pageIndex + 1,
-                        total: lyricsPages.length,
-                    }, `Page ${pageIndex + 1}/${lyricsPages.length}`);
-                    
-                    embed.setFooter({ text: footerText });
-
-                    return embed;
-                };
-
-                const getNavigationRow = (current: number) => {
-                    return new ActionRowBuilder<ButtonBuilder>().addComponents(
-                        new ButtonBuilder().setCustomId("prev").setEmoji(client.emoji.page.back).setStyle(ButtonStyle.Secondary).setDisabled(current === 0),
-                        new ButtonBuilder().setCustomId("stop").setEmoji(client.emoji.page.cancel).setStyle(ButtonStyle.Danger),
-                        new ButtonBuilder().setCustomId("next").setEmoji(client.emoji.page.next).setStyle(ButtonStyle.Secondary).setDisabled(current === lyricsPages.length - 1),
-                    );
-                };
-
-                const liveLyricsRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-                    new ButtonBuilder()
-                        .setCustomId("lyrics_subscribe")
-                        .setLabel(getTxt("cmd.lyrics.button_subscribe", {}, "Subscribe"))
-                        .setStyle(ButtonStyle.Success)
-                        .setDisabled(!isSynced),
-                    new ButtonBuilder()
-                        .setCustomId("lyrics_unsubscribe")
-                        .setLabel(getTxt("cmd.lyrics.button_unsubscribe", {}, "Unsubscribe"))
-                        .setStyle(ButtonStyle.Danger)
-                        .setDisabled(!isSynced),
-                );
-
-                await ctx.editMessage({
-                    embeds: [createLyricsEmbed(currentPage)],
-                    components: [getNavigationRow(currentPage), liveLyricsRow]
-                });
-
-                // --- COLLECTOR ---
-                const filter = (interaction: ButtonInteraction<"cached">) => interaction.user.id === ctx.author?.id;
-                let collectorActive = true;
-                let running = false;
-                let lyricsUpdater: Promise<void> | null = null;
-                let lastLine = -1;
-                let subscriptionActive = false;
-
-                while (collectorActive) {
-                    try {
-                        const interaction = await ctx.channel.awaitMessageComponent({
-                            filter,
-                            componentType: ComponentType.Button,
-                            time: 60000,
-                        });
-
-                        if (interaction.customId === "lyrics_subscribe") {
-                            await interaction.reply({ content: getTxt("cmd.lyrics.subscribed", {}, "✅ Subscribed!"), flags: MessageFlags.Ephemeral });
-                            
-                            if (isSynced && typeof lyricsResult === 'object' && (lyricsResult as LyricsResult).lines) {
-                                running = true;
-                                subscriptionActive = true;
-                                const lyricsLines = (lyricsResult as LyricsResult).lines!;
-                                
-                                lyricsUpdater = (async () => {
-                                    while (running) {
-                                        if (!player || !player.playing) break;
-                                        const position = player.position;
-                                        let currentIdx = lyricsLines.findIndex((l) => {
-                                            const time = (l as any).startTime ?? (l as any).time ?? (l as any).timestamp;
-                                            return typeof time === "number" && time > position;
-                                        });
-                                        if (currentIdx === -1) currentIdx = lyricsLines.length - 1;
-                                        else if (currentIdx > 0) currentIdx--;
-                                        
-                                        if (currentIdx !== lastLine) {
-                                            lastLine = currentIdx;
-                                            const formatted = lyricsLines.slice(Math.max(0, currentIdx - 2), Math.min(lyricsLines.length, currentIdx + 4))
-                                                .map((l, idx) => {
-                                                    const realIdx = Math.max(0, currentIdx - 2) + idx;
-                                                    return realIdx === currentIdx ? `**__${l.line}__**` : l.line;
-                                                }).join("\n");
-                                            
-                                            const liveEmbed = new EmbedBuilder()
-                                                .setColor(client.color.main)
-                                                .setTitle(`🎶 ${trackTitle}`)
-                                                .setURL(displayUrl)
-                                                .setDescription(formatted + "\n\n*Live Synced Lyrics*")
-                                                .setFooter({ text: "Press Unsubscribe to return." });
-
-                                            await ctx.editMessage({ embeds: [liveEmbed], components: [liveLyricsRow] }).catch(() => running = false);
-                                        }
-                                        await new Promise((res) => setTimeout(res, 1500));
-                                    }
-                                })();
-                            }
-                            continue;
-                        }
-
-                        if (interaction.customId === "lyrics_unsubscribe") {
-                            running = false;
-                            subscriptionActive = false;
-                            await interaction.update({
-                                embeds: [createLyricsEmbed(currentPage)],
-                                components: [getNavigationRow(currentPage), liveLyricsRow]
-                            });
-                            if (lyricsUpdater) await lyricsUpdater;
-                            continue;
-                        }
-
-                        if (interaction.customId === "prev") {
-                            currentPage--;
-                        } else if (interaction.customId === "next") {
-                            currentPage++;
-                        } else if (interaction.customId === "stop") {
-                            collectorActive = false;
-                            running = false;
-                            await interaction.update({ components: [] });
-                            break;
-                        }
-
-                        if (!subscriptionActive) {
-                            await interaction.update({
-                                embeds: [createLyricsEmbed(currentPage)],
-                                components: [getNavigationRow(currentPage), liveLyricsRow]
-                            });
-                        }
-
-                    } catch (e) {
-                        collectorActive = false;
-                    }
-                }
-
-                if (ctx.guild?.members.me?.permissionsIn(ctx.channelId).has("SendMessages")) {
-                    await ctx.editMessage({ components: [] }).catch(() => null);
-                }
-
-            } else {
-                const embed = new EmbedBuilder()
-                    .setColor(client.color.red)
-                    .setDescription(getTxt("cmd.lyrics.errors.no_results", {}, "❌ Lyrics empty."));
-                await ctx.editMessage({ embeds: [embed], components: [] });
-            }
-
-        } catch (error) {
-            client.logger.error(error);
-            const embed = new EmbedBuilder()
-                .setColor(client.color.red)
-                .setDescription(getTxt("cmd.lyrics.errors.lyrics_error", {}, "❌ An error occurred."));
-            await ctx.editMessage({ embeds: [embed], components: [] });
-        }
-    }
-
-    // --- HELPER KHUSUS PENCARI ROMAJI (POWERFUL) ---
-    async findGeniusRomaji(title: string, artist: string): Promise<any> {
-        // Daftar Query Maut
-        const queries = [
-            `Genius Romanizations ${title}`, // Prioritas 1: Cari artisnya
-            `${title} Romanized`,            // Prioritas 2
-            `${title} Romaji`,               // Prioritas 3
-            `${artist} ${title} Romanized`   // Prioritas 4
-        ];
-
-        for (const query of queries) {
-            try {
-                const searches = await this.geniusClient.songs.search(query);
-                
-                // SCAN SEMUA HASIL PENCARIAN
-                for (const s of searches) {
-                    const artistLower = s.artist.name.toLowerCase();
-                    const titleLower = s.title.toLowerCase();
-
-                    // KRITERIA ROMAJI YANG KETAT TAPI LUAS
-                    const isGeniusArtist = artistLower.includes("genius romanizations");
-                    const isRomanizedTitle = titleLower.includes("romanized") || titleLower.includes("romaji");
-
-                    if (isGeniusArtist || isRomanizedTitle) {
-                        const text = await s.lyrics();
-                        // Pastikan lirik valid dan panjang
-                        if (text && text.length > 20) {
-                            return {
-                                text: text,
-                                title: s.title,
-                                artist: s.artist.name,
-                                image: s.thumbnail,
-                                url: s.url
-                            };
-                        }
-                    }
-                }
-            } catch (e) {}
-        }
-        return null;
-    }
-
-    paginateLyrics(lyrics: string, ctx: Context): string[] {
-        const lines = lyrics.split("\n");
-        const pages: string[] = [];
-        let currentPage = "";
-        const MAX_CHARACTERS_PER_PAGE = 2500; // Embed max safe length
-
-        for (const line of lines) {
-            const lineWithNewline = `${line}\n`;
-            if (currentPage.length + lineWithNewline.length > MAX_CHARACTERS_PER_PAGE) {
-                if (currentPage.trim()) pages.push(currentPage.trim());
-                currentPage = lineWithNewline;
-            } else {
-                currentPage += lineWithNewline;
-            }
-        }
-        if (currentPage.trim()) pages.push(currentPage.trim());
-        if (pages.length === 0) pages.push("Lyrics unavailable.");
-        return pages;
-    }
-
-    private cleanLyrics(lyrics: string): string {
-        return lyrics
-            .replace(/^(\d+\s*Contributors.*?Lyrics|.*Contributors.*|Lyrics\s*|.*Lyrics\s*)$/gim, "")
-            .replace(/\[.*?\]/g, "")
-            .replace(/^[\s\n\r]+/, "")
-            .replace(/[\s\n\r]+$/, "")
-            .replace(/\n{3,}/g, "\n\n")
-            .trim();
-    }
-
-    // Membersihkan judul lebih agresif: Hapus semua simbol
-    private cleanTitle(title: string): string {
-        return title
-            .replace(/\[.*?\]|\(.*?\)|{.*?}/g, "") // Hapus kurung
-            .replace(/official video|lyrics|audio|mv|official/gi, "") // Hapus kata sampah
-            .replace(/[-~!,.]/g, " ") // Hapus tanda baca (penting buat D-tecnolife)
-            .replace(/\s+/g, " ")     // Rapikan spasi
-            .trim();
-    }
-
-    private isJapanese(text: string | undefined): boolean {
-        if (!text) return false;
-        // Range Unicode Lengkap: Hiragana, Katakana, Kanji
-        return /[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uff9f\u4e00-\u9faf\u3400-\u4dbf]/.test(text);
-    }
-
-    private isValidUrl(url: string | null | undefined): boolean {
-        if (!url) return false;
-        try {
-            const parsed = new URL(url);
-            return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-        } catch (e) {
-            return false;
-        }
-    }
+	private cleanLyrics(lyrics: string): string {
+		let cleaned = lyrics
+			.replace(
+				/^(\d+\s*Contributors.*?Lyrics|.*Contributors.*|Lyrics\s*|.*Lyrics\s*)$/gim,
+				"",
+			)
+			.replace(/^[\s\n\r]+/, "")
+			.replace(/[\s\n\r]+$/, "")
+			.replace(/\n{3,}/g, "\n\n");
+		return cleaned.trim();
+	}
 }
+/**
+ * Project: lavamusic
+ * Author: Appu
+ * Main Contributor: LucasB25
+ * Company: Coders
+ * Copyright (c) 2024. All rights reserved.
+ * This code is the property of Coder and may not be reproduced or
+ * modified without permission. For more information, contact us at
+ * https://discord.gg/YQsGbTwPBx
+ */
