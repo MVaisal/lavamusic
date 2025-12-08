@@ -10,8 +10,11 @@ import {
 } from "discord.js";
 import { Command, type Context, type Lavamusic } from "../../structures/index";
 import { LyricsLine, LyricsResult } from "lavalink-client";
+import Client from "genius-lyrics"; // Import Library Genius
 
 export default class Lyrics extends Command {
+	private geniusClient: Client;
+
 	constructor(client: Lavamusic) {
 		super(client, {
 			name: "lyrics",
@@ -52,6 +55,11 @@ export default class Lyrics extends Command {
 				},
 			],
 		});
+
+		// --- [HYBRID CONFIG] ---
+		// Inisialisasi Genius Client dari Environment Variable
+		const token = process.env.GENIUS_API || process.env.GENIUS_API_KEY || process.env.GENIUS_TOKEN;
+		this.geniusClient = new Client(token);
 	}
 
 	public async run(client: Lavamusic, ctx: Context): Promise<any> {
@@ -69,7 +77,7 @@ export default class Lyrics extends Command {
 			}
 		}
 		if (!songQuery && ctx.args?.[0]) {
-			songQuery = ctx.args[0];
+			songQuery = ctx.args.join(" "); // Modified to join args for better search
 		}
 
 		const player = client.manager.getPlayer(ctx.guild!.id);
@@ -86,40 +94,46 @@ export default class Lyrics extends Command {
 				flags: MessageFlags.IsComponentsV2,
 			});
 		}
-		// If songQuery is given, fetch lyrics for the specified song
+
 		let trackTitle = "";
 		let artistName = "";
 		let trackUrl = "";
 		let artworkUrl = "";
-		let lyricsResult: LyricsResult | string = "";
+		let lyricsResult: LyricsResult | string | null = null;
+		let isSynced = false; // Penanda apakah lirik ini synced (Plugin) atau teks biasa (Genius)
+
+		// --- [PREPARE SEARCH INFO] ---
+		let targetTrack: any = null;
+
+		// If songQuery is given, we will search for it
 		if (songQuery) {
-			const result = await this.fetchTrackAndLyrics({
-				client,
-				ctx,
-				songQuery,
-				player,
-			});
-			if (!result) return;
-			lyricsResult = result.lyricsResult;
-			trackTitle = result.trackTitle;
-			artistName = result.artistName;
-			trackUrl = result.trackUrl;
-			artworkUrl = result.artworkUrl;
-		} else if (player && player.queue.current) {
-			// If no songquery is given, fetch lyrics for the currently playing song
-			lyricsResult = await player.getCurrentLyrics(false);
-			const track = player.queue.current;
-			trackTitle =
-				(track.info.title
-					?.replace(/\[.*?]|\(.*?\)|{.*?}/g, "")
-					.trim() as string) || "Unknown Title";
-			artistName =
-				(track.info.author
-					?.replace(/\[.*?]|\(.*?\)|{.*?}/g, "")
-					.trim() as string) || "Unknown Artist";
-			trackUrl = track.info.uri ?? "about:blank";
-			artworkUrl = track.info.artworkUrl || "";
+			const searchRes = await client.manager.search(songQuery, ctx.author);
+			if (searchRes.tracks.length > 0) {
+				targetTrack = searchRes.tracks[0];
+			}
+		} 
+		// If no songquery is given, fetch lyrics for the currently playing song
+		else if (player && player.queue.current) {
+			targetTrack = player.queue.current;
 		}
+
+		if (!targetTrack) {
+			const noResultsContainer = new ContainerBuilder()
+				.setAccentColor(client.color.red)
+				.addTextDisplayComponents((textDisplay) =>
+					textDisplay.setContent(ctx.locale("cmd.lyrics.errors.no_results")),
+				);
+			return ctx.sendMessage({
+				components: [noResultsContainer],
+				flags: MessageFlags.IsComponentsV2,
+			});
+		}
+
+		// Set initial metadata
+		trackTitle = targetTrack.info.title || "Unknown Title";
+		artistName = targetTrack.info.author || "Unknown Artist";
+		trackUrl = targetTrack.info.uri || "";
+		artworkUrl = targetTrack.info.artworkUrl || "";
 
 		const searchingContainer = new ContainerBuilder()
 			.setAccentColor(client.color.main)
@@ -134,8 +148,85 @@ export default class Lyrics extends Command {
 			flags: MessageFlags.IsComponentsV2,
 		});
 
+		// --- [HYBRID FETCHING LOGIC START] ---
 		try {
-			// Handle lyricsResult as an object with lines (Musixmatch, Spotify, etc.)
+			const cleanTitle = this.cleanTitle(trackTitle);
+			const isJp = this.isJapanese(trackTitle) || this.isJapanese(artistName);
+
+			// 1. CEK GENIUS (ROMAJI) - Prioritas untuk Lagu Jepang
+			if (isJp) {
+				try {
+					const romajiQuery = `${cleanTitle} ${artistName} Romaji`;
+					const searches = await this.geniusClient.songs.search(romajiQuery);
+					
+					if (searches.length > 0) {
+						const song = searches[0];
+						const text = await song.lyrics();
+						if (text && text.length > 10) {
+							lyricsResult = text;
+							isSynced = false; // Genius tidak punya timestamp
+							// Update info agar sesuai hasil Genius
+							trackTitle = song.title;
+							artistName = song.artist.name;
+							artworkUrl = song.thumbnail;
+						}
+					}
+				} catch (e) { /* Lanjut ke langkah berikutnya */ }
+			}
+
+			// 2. CEK PLUGIN LAVALINK (LavaLyrics) - Utama untuk lagu Barat/Indo (Synced)
+			if (!lyricsResult) {
+				try {
+					let res: LyricsResult | null = null;
+					// Jika player aktif dan lagu sama, pakai currentLyrics
+					if (player && player.queue.current?.info.uri === targetTrack.info.uri) {
+						// Gunakan metode bawaan library lavalink-client
+						res = await player.getCurrentLyrics(false);
+					} else {
+						// Jika search manual, minta node cari lirik
+						const node = client.manager.nodeManager.leastUsedNodes()[0];
+						res = await node.lyrics.get(targetTrack, true);
+					}
+
+					if (res) {
+						lyricsResult = res;
+						// Cek apakah hasil plugin ini synced (ada baris waktunya)
+						if (typeof res === 'object' && Array.isArray(res.lines) && res.lines.length > 0) {
+							isSynced = true;
+						} else {
+							isSynced = false;
+						}
+					}
+				} catch (e) { /* Lanjut ke langkah berikutnya */ }
+			}
+
+			// 3. CEK GENIUS (NORMAL) - Backup Terakhir
+			if (!lyricsResult) {
+				try {
+					const normalQuery = `${cleanTitle} ${artistName}`;
+					const searches = await this.geniusClient.songs.search(normalQuery);
+					
+					if (searches.length > 0) {
+						const song = searches[0];
+						const text = await song.lyrics();
+						if (text && text.length > 10) {
+							lyricsResult = text;
+							isSynced = false;
+							trackTitle = song.title;
+							artistName = song.artist.name;
+							artworkUrl = song.thumbnail;
+						}
+					}
+				} catch (e) { /* Nyerah */ }
+			}
+
+		} catch (error) {
+			client.logger.error(error);
+		}
+		// --- [HYBRID FETCHING LOGIC END] ---
+
+		try {
+			// Handle lyricsResult as an object with lines (Musixmatch, Spotify, etc.) OR String (Genius)
 			let lyricsText: string | null = null;
 			if (
 				lyricsResult &&
@@ -145,9 +236,13 @@ export default class Lyrics extends Command {
 				lyricsText = (lyricsResult as LyricsResult)
 					.lines!.map((l: LyricsLine) => l.line)
 					.join("\n");
+			} else if (typeof lyricsResult === "object" && (lyricsResult as any).text) {
+				// Handle some plugins returning { text: string }
+				lyricsText = (lyricsResult as any).text;
 			} else if (typeof lyricsResult === "string") {
 				lyricsText = lyricsResult;
 			}
+
 			if (!lyricsText || lyricsText.length < 10) {
 				const noResultsContainer = new ContainerBuilder()
 					.setAccentColor(client.color.red)
@@ -237,11 +332,14 @@ export default class Lyrics extends Command {
 						new ButtonBuilder()
 							.setCustomId("lyrics_subscribe")
 							.setLabel(ctx.locale("cmd.lyrics.button_subscribe"))
-							.setStyle(ButtonStyle.Success),
+							.setStyle(ButtonStyle.Success)
+							// [HYBRID] Hanya enable jika lyricsResult synced (dari plugin)
+							.setDisabled(!isSynced),
 						new ButtonBuilder()
 							.setCustomId("lyrics_unsubscribe")
 							.setLabel(ctx.locale("cmd.lyrics.button_unsubscribe"))
-							.setStyle(ButtonStyle.Danger),
+							.setStyle(ButtonStyle.Danger)
+							.setDisabled(!isSynced),
 					);
 
 				await ctx.editMessage({
@@ -272,58 +370,70 @@ export default class Lyrics extends Command {
 								content: ctx.locale("cmd.lyrics.subscribed"),
 								flags: MessageFlags.Ephemeral,
 							});
-							running = true;
-							subscriptionActive = true;
-							const maxTime = Date.now() + 3 * 60 * 1000;
-							const lyricsLines = (lyricsResult as LyricsResult).lines!;
-							lyricsUpdater = (async () => {
-								while (running && Date.now() < maxTime) {
-									if (!player || !player.playing) break;
-									const position = player.position;
-									let currentIdx = lyricsLines.findIndex((l) => {
-										const time =
-											(l as any).startTime ??
-											(l as any).time ??
-											(l as any).timestamp;
-										return typeof time === "number" && time > position;
-									});
-									if (currentIdx === -1) currentIdx = lyricsLines.length - 1;
-									else if (currentIdx > 0) currentIdx--;
-									if (currentIdx !== lastLine) {
-										lastLine = currentIdx;
-										const formatted = lyricsLines
-											.map((l, i) =>
-												i === currentIdx ? `**${l.line}**` : l.line,
-											)
-											.join("\n");
-										const liveLyricsContainer = new ContainerBuilder()
-											.setAccentColor(client.color.main)
-											.addTextDisplayComponents((textDisplay) =>
-												textDisplay.setContent(
-													ctx.locale("cmd.lyrics.lyrics_for_track", {
-														trackTitle,
-														trackUrl,
-													}) +
-														"\n" +
-														(artistName ? `*${artistName}*\n\n` : "") +
-														formatted,
-												),
-											);
-										await ctx.editMessage({
-											components: [liveLyricsContainer, liveLyricsRow],
-											flags: MessageFlags.IsComponentsV2,
+							
+							// [HYBRID] Pastikan tipe datanya benar sebelum menjalankan updater
+							if (isSynced && typeof lyricsResult === 'object' && (lyricsResult as LyricsResult).lines) {
+								running = true;
+								subscriptionActive = true;
+								const maxTime = Date.now() + 3 * 60 * 1000;
+								const lyricsLines = (lyricsResult as LyricsResult).lines!;
+								lyricsUpdater = (async () => {
+									while (running && Date.now() < maxTime) {
+										if (!player || !player.playing) break;
+										const position = player.position;
+										let currentIdx = lyricsLines.findIndex((l) => {
+											const time =
+												(l as any).startTime ??
+												(l as any).time ??
+												(l as any).timestamp;
+											return typeof time === "number" && time > position;
 										});
+										if (currentIdx === -1) currentIdx = lyricsLines.length - 1;
+										else if (currentIdx > 0) currentIdx--;
+										if (currentIdx !== lastLine) {
+											lastLine = currentIdx;
+											const formatted = lyricsLines
+												.map((l, i) =>
+													i === currentIdx ? `**${l.line}**` : l.line,
+												)
+												.join("\n");
+											const liveLyricsContainer = new ContainerBuilder()
+												.setAccentColor(client.color.main)
+												.addTextDisplayComponents((textDisplay) =>
+													textDisplay.setContent(
+														ctx.locale("cmd.lyrics.lyrics_for_track", {
+															trackTitle,
+															trackUrl,
+														}) +
+															"\n" +
+															(artistName ? `*${artistName}*\n\n` : "") +
+															formatted,
+													),
+												);
+											await ctx.editMessage({
+												components: [liveLyricsContainer, liveLyricsRow],
+												flags: MessageFlags.IsComponentsV2,
+											});
+										}
+										await new Promise((res) => setTimeout(res, 1000));
 									}
-									await new Promise((res) => setTimeout(res, 1000));
-								}
-							})();
+								})();
+							}
 							continue;
 						}
 						if (interaction.customId === "lyrics_unsubscribe") {
 							running = false;
 							subscriptionActive = false;
-							const lyricsLines = (lyricsResult as any).lines as LyricsLine[];
-							const formatted = lyricsLines.map((l) => l.line).join("\n");
+							
+							// [HYBRID] Fallback logic untuk menampilkan lirik statis saat unsubscribe
+							let formatted = "";
+							if (isSynced && typeof lyricsResult === 'object' && (lyricsResult as LyricsResult).lines) {
+								const lyricsLines = (lyricsResult as any).lines as LyricsLine[];
+								formatted = lyricsLines.map((l) => l.line).join("\n");
+							} else {
+								formatted = cleanedLyrics;
+							}
+
 							const unsubLyricsContainer = new ContainerBuilder()
 								.setAccentColor(client.color.main)
 								.addTextDisplayComponents((textDisplay) =>
@@ -442,62 +552,8 @@ export default class Lyrics extends Command {
 		}
 	}
 
-	async fetchTrackAndLyrics({
-		client,
-		ctx,
-		songQuery,
-		player,
-	}: {
-		client: Lavamusic;
-		ctx: Context;
-		songQuery: string;
-		player?: any; // Use proper player type from lavalink-client
-	}) {
-		let trackTitle = "";
-		let artistName = "";
-		let trackUrl = "";
-		let artworkUrl = "";
-		let lyricsResult: LyricsResult | string = "";
-
-		const searchRes = await client.manager.search(
-			songQuery,
-			ctx.author,
-			undefined,
-		);
-		const track = searchRes.tracks[0];
-		if (!track) {
-			const noResultsContainer = new ContainerBuilder()
-				.setAccentColor(client.color.red)
-				.addTextDisplayComponents((textDisplay) =>
-					textDisplay.setContent(ctx.locale("cmd.lyrics.errors.no_results")),
-				);
-			await ctx.editMessage({
-				components: [noResultsContainer],
-				flags: MessageFlags.IsComponentsV2,
-			});
-			return null;
-		}
-		try {
-			if (!player) {
-				const node = client.manager.nodeManager.leastUsedNodes()[0];
-				const result = await node.lyrics.get(track, true);
-				lyricsResult = result ?? "";
-			} else {
-				lyricsResult = await player.getLyrics(track, true);
-			}
-		} catch (err) {
-			if (client.logger && typeof client.logger.error === "function") {
-				client.logger.error(`[LYRICS] Error fetching lyrics: ${err}`);
-			}
-			throw err;
-		}
-		trackTitle = track.info.title;
-		artistName = track.info.author;
-		trackUrl = track.info.uri;
-		artworkUrl = track.info.artworkUrl || "";
-
-		return { lyricsResult, trackTitle, artistName, trackUrl, artworkUrl };
-	}
+	// fetchTrackAndLyrics tidak lagi dipakai karena sudah digabung ke dalam run() untuk hybrid logic, 
+	// tapi method paginateLyrics & cleanLyrics tetap dipakai.
 
 	paginateLyrics(lyrics: string, ctx: Context): string[] {
 		const lines = lyrics.split("\n");
@@ -538,11 +594,25 @@ export default class Lyrics extends Command {
 				/^(\d+\s*Contributors.*?Lyrics|.*Contributors.*|Lyrics\s*|.*Lyrics\s*)$/gim,
 				"",
 			)
+			.replace(/\[.*?\]/g, "") // Added: Remove [Verse], [Chorus] tags from Genius
 			.replace(/^[\s\n\r]+/, "")
 			.replace(/[\s\n\r]+$/, "")
 			.replace(/\n{3,}/g, "\n\n");
 		return cleaned.trim();
 	}
+
+	// --- [HELPER FUNCTIONS UNTUK HYBRID] ---
+	private cleanTitle(title: string): string {
+        return title
+            .replace(/\[.*?\]|\(.*?\)|{.*?}/g, "") 
+            .replace(/official video|lyrics|audio|mv|official/gi, "")
+            .trim();
+    }
+
+    private isJapanese(text: string | undefined): boolean {
+        if (!text) return false;
+        return /[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uff9f\u4e00-\u9faf\u3400-\u4dbf]/.test(text);
+    }
 }
 /**
  * Project: lavamusic
