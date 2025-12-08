@@ -4,8 +4,9 @@ import {
     ActionRowBuilder, 
     ButtonBuilder, 
     ButtonStyle,
-    GuildMember,
-    ComponentType
+    ComponentType,
+    type Interaction,
+    type ButtonInteraction
 } from "discord.js";
 
 export default class Nowplaying extends Command {
@@ -46,40 +47,44 @@ export default class Nowplaying extends Command {
     public async run(client: Lavamusic, ctx: Context): Promise<any> {
         const player = client.manager.getPlayer(ctx.guild.id);
 
-        // 1. Cek apakah ada musik
         if (!player || !player.queue.current) {
             const noMusic = ctx.locale("event.message.no_music_playing");
-            const embed = new EmbedBuilder()
-                .setColor(this.client.color.red)
-                .setDescription(noMusic);
-                
-            return ctx.sendMessage({
-                embeds: [embed]
-            });
+            const embed = new EmbedBuilder().setColor(this.client.color.red).setDescription(noMusic);
+            return ctx.sendMessage({ embeds: [embed] });
         }
 
-        const track = player.queue.current;
-        const pos = player.position;
-        const dur = track.info.duration;
-        const bar = client.utils.progressBar(pos, dur, 20);
+        // --- [LOGIKA AMBIL ALIH UPDATE] ---
+        // 1. Matikan update di pesan lama (TrackStart atau NowPlaying sebelumnya)
+        const oldInterval = player.get("autoUpdateInterval");
+        if (oldInterval) {
+            clearInterval(oldInterval as NodeJS.Timeout);
+        }
+        // ----------------------------------
 
-        // 2. Membuat Embed Utama
+        const track = player.queue.current;
+        const duration = track.info.duration;
+        let position = player.position;
+        
+        // Progress Bar & Time
+        let progressBar = client.utils.progressBar(position, duration, 20);
+        let durationText = track.info.isStream ? "🔴 LIVE" : `\`${client.utils.formatTime(position)} / ${client.utils.formatTime(duration)}\``;
+
+        // Create Embed
         const embed = new EmbedBuilder()
             .setColor(this.client.color.main)
             .setAuthor({
                 name: ctx.locale("cmd.nowplaying.now_playing"),
                 iconURL: ctx.author.displayAvatarURL()
             })
-            .setDescription(`**[${track.info.title}](${track.info.uri ?? ""})**\n\n${bar}\n\`${client.utils.formatTime(pos)} / ${client.utils.formatTime(dur)}\``)
+            .setDescription(`**[${track.info.title}](${track.info.uri ?? ""})**\n\n${progressBar}\n${durationText}`)
             .setThumbnail(track.info.artworkUrl ?? null)
             .setFooter({
-                // Menggunakan key dari TrackStart karena sudah pasti ada
                 text: ctx.locale("player.trackStart.requested_by", { user: (track.requester as any).username || "Unknown" }),
                 iconURL: (track.requester as any).avatarURL || null
             })
             .setTimestamp();
 
-        // 3. Menambahkan Info Detail
+        // Add Fields
         embed.addFields({
             name: ctx.locale("player.trackStart.author") || "Artist", 
             value: track.info.author,
@@ -100,41 +105,66 @@ export default class Nowplaying extends Command {
             inline: true
         });
 
-        // 4. Membuat Tombol (Fungsi Helper di bawah)
+        // Send Message
         const components = this.createButtonRow(player, client);
-
-        // 5. Kirim Pesan & Simpan ke Variabel 'message'
         const message = await ctx.sendMessage({
             embeds: [embed],
             components: components
         });
 
-        // 6. [PENTING] Pasang Collector agar tombol berfungsi
-        // Kita menggunakan logika yang sama dengan TrackStart
+        // --- [LOGIKA UPDATE BARU] ---
+        // 2. Buat Interval baru untuk pesan ini
+        const newInterval = setInterval(async () => {
+            // Cek validitas player
+            if (!player || !player.queue.current || player.queue.current.info.uri !== track.info.uri) {
+                clearInterval(newInterval);
+                return;
+            }
+            if (player.paused) return;
+
+            try {
+                // Update Bar
+                const currentPos = player.position;
+                const newBar = client.utils.progressBar(currentPos, duration, 20);
+                const newTimeText = track.info.isStream ? "🔴 LIVE" : `\`${client.utils.formatTime(currentPos)} / ${client.utils.formatTime(duration)}\``;
+                
+                embed.setDescription(`**[${track.info.title}](${track.info.uri ?? ""})**\n\n${newBar}\n${newTimeText}`);
+                
+                await message.edit({ embeds: [embed] });
+            } catch (e) {
+                clearInterval(newInterval);
+            }
+        }, 30000); // Update tiap 30 detik
+
+        // 3. Simpan Interval baru ke player agar bisa dimatikan nanti
+        player.set("autoUpdateInterval", newInterval);
+        // ----------------------------
+
+        // Button Collector
         const collector = message.createMessageComponentCollector({
-            filter: (b) => {
-                if (b.member instanceof GuildMember) {
-                    if (b.guild?.members.me?.voice.channelId === b.member.voice.channelId) return true;
-                }
+            filter: (b: any) => {
+                if (b.guild.members.me.voice.channelId === b.member.voice.channelId) return true;
                 b.reply({
-                    content: ctx.locale("player.trackStart.not_connected_to_voice_channel", {
-                        channel: b.guild?.members.me?.voice.channelId ?? "None"
-                    }),
+                    content: ctx.locale("player.trackStart.not_connected_to_voice_channel", { channel: b.guild.members.me.voice.channelId }),
                     ephemeral: true
                 });
                 return false;
             },
             componentType: ComponentType.Button,
-            time: 60000 // Tombol aktif selama 60 detik (hemat memori)
+            time: 300000 // 5 Menit aktif
         });
 
-        collector.on("collect", async (interaction) => {
-             // Cek DJ Permission (Opsional, jika ingin ketat bisa diaktifkan)
-             // Untuk NowPlaying biasanya dibebaskan atau cek DJ standar
-             
-             // Update tombol setiap kali ada interaksi
+        collector.on("collect", async (interaction: ButtonInteraction) => {
+            // Update embed function for buttons
             const updateComponents = async () => {
+                // Saat tombol diklik, kita juga update progress bar agar terasa responsif
+                const currPos = player.position;
+                const barNow = client.utils.progressBar(currPos, duration, 20);
+                const timeNow = `\`${client.utils.formatTime(currPos)} / ${client.utils.formatTime(duration)}\``;
+                embed.setDescription(`**[${track.info.title}](${track.info.uri ?? ""})**\n\n${barNow}\n${timeNow}`);
+
                 await interaction.editReply({
+                    embeds: [embed],
                     components: this.createButtonRow(player, client)
                 });
             };
@@ -154,6 +184,8 @@ export default class Nowplaying extends Command {
                     player.stopPlaying(true, false);
                     await interaction.deferUpdate();
                     await updateComponents();
+                    // Clear interval if stopped
+                    clearInterval(newInterval);
                     break;
 
                 case "skip":
@@ -169,16 +201,12 @@ export default class Nowplaying extends Command {
                 case "shuffle":
                     player.queue.shuffle();
                     await interaction.reply({ content: `Shuffled by ${interaction.user.username}`, ephemeral: true });
-                    // Tidak perlu update tombol untuk shuffle
                     break;
 
-                case "resume": // Menangani Pause/Resume
+                case "resume":
                     await interaction.deferUpdate();
-                    if (player.paused) {
-                        player.resume();
-                    } else {
-                        player.pause();
-                    }
+                    if (player.paused) player.resume();
+                    else player.pause();
                     await updateComponents();
                     break;
 
@@ -194,8 +222,9 @@ export default class Nowplaying extends Command {
             }
         });
 
-        // Hapus tombol saat waktu habis agar tidak error jika diklik nanti
         collector.on("end", () => {
+            // Saat collector mati (5 menit), kita matikan juga auto-update untuk menghemat resource
+            clearInterval(newInterval);
             if (message.editable) {
                 message.edit({ components: [] }).catch(() => null);
             }
@@ -204,25 +233,17 @@ export default class Nowplaying extends Command {
         return message;
     }
 
-    // Helper untuk membuat baris tombol
     private createButtonRow(player: any, client: Lavamusic) {
-        const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder().setCustomId("previous").setEmoji(client.emoji.previous).setStyle(ButtonStyle.Secondary).setDisabled(!player.queue.previous.length),
-            new ButtonBuilder().setCustomId("stop").setEmoji(client.emoji.stop).setStyle(ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId("skip").setEmoji(client.emoji.skip).setStyle(ButtonStyle.Secondary)
-        );
-
-        const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder().setCustomId("shuffle").setEmoji("🔀").setStyle(ButtonStyle.Secondary).setDisabled(player.queue.tracks.length === 0),
-            new ButtonBuilder()
-                .setCustomId("resume")
-                .setEmoji(player.paused ? client.emoji.resume : client.emoji.pause)
-                .setStyle(player.paused ? ButtonStyle.Success : ButtonStyle.Secondary),
-            new ButtonBuilder()
-                .setCustomId("loop")
-                .setEmoji(player.repeatMode === "track" ? client.emoji.loop.track : client.emoji.loop.none)
-                .setStyle(player.repeatMode !== "off" ? ButtonStyle.Success : ButtonStyle.Secondary)
-        );
+        const previousButton = new ButtonBuilder().setCustomId("previous").setEmoji(client.emoji.previous).setStyle(ButtonStyle.Secondary).setDisabled(!player.queue.previous.length);
+        const resumeButton = new ButtonBuilder().setCustomId("resume").setEmoji(player.paused ? client.emoji.resume : client.emoji.pause).setStyle(player.paused ? ButtonStyle.Success : ButtonStyle.Secondary);
+        const stopButton = new ButtonBuilder().setCustomId("stop").setEmoji(client.emoji.stop).setStyle(ButtonStyle.Danger);
+        const skipButton = new ButtonBuilder().setCustomId("skip").setEmoji(client.emoji.skip).setStyle(ButtonStyle.Secondary);
+        
+        const shuffleButton = new ButtonBuilder().setCustomId("shuffle").setEmoji("🔀").setStyle(ButtonStyle.Secondary).setDisabled(player.queue.tracks.length === 0);
+        const loopButton = new ButtonBuilder().setCustomId("loop").setEmoji(player.repeatMode === "track" ? client.emoji.loop.track : client.emoji.loop.none).setStyle(player.repeatMode !== "off" ? ButtonStyle.Success : ButtonStyle.Secondary);
+        
+        const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(previousButton, stopButton, skipButton);
+        const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(shuffleButton, resumeButton, loopButton);
 
         return [row1, row2];
     }

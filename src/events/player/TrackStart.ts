@@ -45,6 +45,12 @@ class TrackStart extends import_structures.Event {
     const channel = guild.channels.cache.get(player.textChannelId);
     if (!channel) return;
     
+    // --- [LOGIKA RESET INTERVAL LAMA] ---
+    // Jika ada interval update dari lagu sebelumnya atau command !nowplaying sebelumnya, matikan dulu.
+    const oldInterval = player.get("autoUpdateInterval");
+    if (oldInterval) clearInterval(oldInterval);
+    // ------------------------------------
+
     // 1. UPDATE STATUS BOT
     try {
       const rawTitle = `${track.info.title} by ${track.info.author}`;
@@ -66,13 +72,11 @@ class TrackStart extends import_structures.Event {
       await this.client.utils.setVoiceStatus(this.client, player.voiceChannelId, finalVcStatus);
     }
     
-    // --- [LOGIKA PROGRESS BAR BARU] ---
-    // Karena ini trackStart, posisi pasti 0
+    // SETUP PROGRESS BAR AWAL
     const duration = track.info.duration;
     const position = 0; 
-    const progressBar = this.client.utils.progressBar(position, duration, 20); // Panjang bar 20 balok
+    const progressBar = this.client.utils.progressBar(position, duration, 20); 
     const durationText = track.info.isStream ? "🔴 LIVE" : `\`${this.client.utils.formatTime(position)} / ${this.client.utils.formatTime(duration)}\``;
-    // ----------------------------------
 
     // 3. MEMBUAT EMBED
     const embed = this.client.embed()
@@ -81,7 +85,6 @@ class TrackStart extends import_structures.Event {
             iconURL: this.client.config.icons[track.info.sourceName] ?? this.client.user?.displayAvatarURL({ extension: "png" })
         })
         .setColor(this.client.color.main)
-        // Deskripsi digabung: Judul + Bar + Waktu
         .setDescription(`**[${track.info.title}](${track.info.uri})**\n\n${progressBar}\n${durationText}`)
         .setThumbnail(track.info.artworkUrl)
         .setFooter({
@@ -90,14 +93,12 @@ class TrackStart extends import_structures.Event {
         })
         .setTimestamp();
 
-    // Field: Author / Artist
     embed.addFields({
         name: (0, import_I18n.T)(locale, "player.trackStart.author"),
         value: track.info.author,
         inline: true
     });
 
-    // Field: Album (Jika Ada)
     if (track.pluginInfo && track.pluginInfo.albumName) {
         embed.addFields({
             name: "Album",
@@ -106,7 +107,6 @@ class TrackStart extends import_structures.Event {
         });
     }
     
-    // Field: Source
     embed.addFields({
         name: "Source",
         value: track.info.sourceName,
@@ -125,6 +125,32 @@ class TrackStart extends import_structures.Event {
             components: createButtonRow(player, this.client)
         });
         player.set("messageId", message.id);
+
+        // --- [AUTO UPDATE 30 DETIK] ---
+        const interval = setInterval(async () => {
+            if (!player || !player.queue.current || player.queue.current.info.uri !== track.info.uri) {
+                clearInterval(interval);
+                return;
+            }
+            if (player.paused) return;
+
+            try {
+                const currentPos = player.position;
+                const totalDur = track.info.duration;
+                const newBar = this.client.utils.progressBar(currentPos, totalDur, 20);
+                const newTime = track.info.isStream ? "🔴 LIVE" : `\`${this.client.utils.formatTime(currentPos)} / ${this.client.utils.formatTime(totalDur)}\``;
+                
+                embed.setDescription(`**[${track.info.title}](${track.info.uri})**\n\n${newBar}\n${newTime}`);
+                await message.edit({ embeds: [embed] });
+            } catch (e) {
+                clearInterval(interval);
+            }
+        }, 30000);
+        
+        // SIMPAN ID INTERVAL KE PLAYER SUPAYA BISA DIMATIKAN OLEH COMMAND !nowplaying
+        player.set("autoUpdateInterval", interval);
+        // ------------------------------
+
         createCollector(message, player, track, embed, this.client, locale);
     }
   }
@@ -136,7 +162,6 @@ function createButtonRow(player, client) {
   const resumeButton = new import_discord.ButtonBuilder().setCustomId("resume").setEmoji(player.paused ? client.emoji.resume : client.emoji.pause).setStyle(player.paused ? import_discord.ButtonStyle.Success : import_discord.ButtonStyle.Secondary);
   const stopButton = new import_discord.ButtonBuilder().setCustomId("stop").setEmoji(client.emoji.stop).setStyle(import_discord.ButtonStyle.Danger);
   const skipButton = new import_discord.ButtonBuilder().setCustomId("skip").setEmoji(client.emoji.skip).setStyle(import_discord.ButtonStyle.Secondary);
-  
   const shuffleButton = new import_discord.ButtonBuilder().setCustomId("shuffle").setEmoji("🔀").setStyle(import_discord.ButtonStyle.Secondary).setDisabled(player.queue.tracks.length === 0);
   const loopButton = new import_discord.ButtonBuilder().setCustomId("loop").setEmoji(player.repeatMode === "track" ? client.emoji.loop.track : client.emoji.loop.none).setStyle(player.repeatMode !== "off" ? import_discord.ButtonStyle.Success : import_discord.ButtonStyle.Secondary);
   
@@ -173,22 +198,18 @@ function createCollector(message, player, _track, embed, client, locale) {
       return;
     }
 
-    // --- LOGIKA UPDATE EMBED SAAT TOMBOL DIKLIK ---
     const editMessage = /* @__PURE__ */ __name(async (text) => {
       if (message) {
-        // Update bar progress sesuai posisi saat ini ketika tombol diklik
         const currentPos = player.position; 
         const totalDur = player.queue.current.info.duration;
         const newBar = client.utils.progressBar(currentPos, totalDur, 20);
         const newTime = `\`${client.utils.formatTime(currentPos)} / ${client.utils.formatTime(totalDur)}\``;
-        
-        // Re-construct description
         const newDesc = `**[${player.queue.current.info.title}](${player.queue.current.info.uri})**\n\n${newBar}\n${newTime}`;
 
         await message.edit({
           embeds: [
             embed
-              .setDescription(newDesc) // Update deskripsi dengan bar baru
+              .setDescription(newDesc)
               .setFooter({
                 text,
                 iconURL: interaction.user.avatarURL({})
@@ -198,7 +219,6 @@ function createCollector(message, player, _track, embed, client, locale) {
         });
       }
     }, "editMessage");
-    // ----------------------------------------------
     
     switch (interaction.customId) {
       case "previous":
