@@ -53,18 +53,17 @@ export default class Nowplaying extends Command {
             return ctx.sendMessage({ embeds: [embed] });
         }
 
-        // --- [LOGIKA HAPUS TOMBOL & INTERVAL LAMA] ---
-        // Matikan update otomatis dari pesan sebelumnya
+        // --- [LOGIKA DELETE PESAN LAMA & INTERVAL] ---
         const oldInterval = player.get("autoUpdateInterval");
         if (oldInterval) {
             clearInterval(oldInterval as NodeJS.Timeout);
         }
 
-        // Hapus tombol dari pesan sebelumnya (TrackStart atau NowPlaying lama)
+        // [UBAHAN] Delete pesan sebelumnya jika ada
         const oldMessage = player.get("nowPlayingMessage");
         if (oldMessage) {
             try {
-                await oldMessage.edit({ components: [] });
+                await oldMessage.delete(); 
             } catch (e) {
                 // Abaikan jika pesan sudah terhapus
             }
@@ -84,7 +83,7 @@ export default class Nowplaying extends Command {
             .setColor(this.client.color.main)
             .setAuthor({
                 name: ctx.locale("cmd.nowplaying.now_playing"),
-                // Menggunakan icon source (Spotify/Youtube) bukan avatar user
+                // Gunakan icon source sesuai config (Spotify/Youtube dll)
                 iconURL: client.config.icons[track.info.sourceName] ?? client.user?.displayAvatarURL({ extension: "png" })
             })
             .setDescription(`**[${track.info.title}](${track.info.uri ?? ""})**\n\n${progressBar}\n${durationText}`)
@@ -124,7 +123,7 @@ export default class Nowplaying extends Command {
         });
 
         // --- [SIMPAN PESAN BARU KE PLAYER] ---
-        // Simpan pesan ini agar tombolnya bisa dihapus nanti
+        // Simpan agar bisa dihapus oleh TrackStart berikutnya
         player.set("nowPlayingMessage", message);
         // -------------------------------------
 
@@ -147,7 +146,7 @@ export default class Nowplaying extends Command {
             } catch (e) {
                 clearInterval(newInterval);
             }
-        }, 30000); // Update tiap 30 detik
+        }, 30000); 
 
         player.set("autoUpdateInterval", newInterval);
         // ------------------------------------
@@ -193,7 +192,7 @@ export default class Nowplaying extends Command {
                 case "stop":
                     player.stopPlaying(true, false);
                     await interaction.deferUpdate();
-                    // [UBAHAN] Hapus tombol di nowplaying saat stop diklik
+                    // Hapus tombol di nowplaying saat stop
                     await interaction.editReply({ components: [] }); 
                     clearInterval(newInterval);
                     break;

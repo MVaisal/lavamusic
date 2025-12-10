@@ -46,23 +46,21 @@ class TrackStart extends import_structures.Event {
     if (!channel) return;
     
     // --- [LOGIKA RESET INTERVAL LAMA] ---
-    // Jika ada interval update dari lagu sebelumnya atau command !nowplaying sebelumnya, matikan dulu.
     const oldInterval = player.get("autoUpdateInterval");
     if (oldInterval) clearInterval(oldInterval);
 
-    // --- [LOGIKA HAPUS TOMBOL PESAN LAMA] ---
-    // Kita cek apakah ada pesan nowPlayingMessage (dari track sebelumnya atau command NP)
-    // Jika ada, kita hapus tombolnya supaya tidak ada double button.
+    // --- [UBAHAN: DELETE PESAN LAMA] ---
+    // Kita ambil pesan nowPlayingMessage dari lagu sebelumnya
     const oldMessage = player.get("nowPlayingMessage");
     if (oldMessage) {
         try {
-            await oldMessage.edit({ components: [] });
+            // Hapus pesan lama sepenuhnya agar tidak menumpuk
+            await oldMessage.delete();
         } catch (e) {
-            // Abaikan error jika pesan sudah dihapus manual
-            console.log("Pesan lama tidak ditemukan atau sudah dihapus");
+            // Abaikan error jika pesan sudah dihapus manual atau tidak ada
         }
     }
-    // ------------------------------------------
+    // ------------------------------------
 
     // 1. UPDATE STATUS BOT
     try {
@@ -138,10 +136,10 @@ class TrackStart extends import_structures.Event {
             components: createButtonRow(player, this.client)
         });
         
-        // --- [SIMPAN OBJECT PESAN] ---
-        // Kita simpan seluruh pesan, bukan cuma ID, agar bisa diedit (hapus tombol) oleh command NP/Stop
+        // --- [SIMPAN PESAN BARU] ---
+        // Simpan pesan ini agar bisa dihapus saat lagu berikutnya mulai
         player.set("nowPlayingMessage", message);
-        // -------------------------------------
+        // ---------------------------
 
         // --- [AUTO UPDATE 30 DETIK] ---
         const interval = setInterval(async () => {
@@ -164,7 +162,6 @@ class TrackStart extends import_structures.Event {
             }
         }, 30000);
         
-        // SIMPAN ID INTERVAL KE PLAYER SUPAYA BISA DIMATIKAN OLEH COMMAND !nowplaying
         player.set("autoUpdateInterval", interval);
         // ------------------------------
 
@@ -173,7 +170,6 @@ class TrackStart extends import_structures.Event {
   }
 }
 
-// 4. SUSUNAN TOMBOL
 function createButtonRow(player, client) {
   const previousButton = new import_discord.ButtonBuilder().setCustomId("previous").setEmoji(client.emoji.previous).setStyle(import_discord.ButtonStyle.Secondary).setDisabled(!player.queue.previous);
   const resumeButton = new import_discord.ButtonBuilder().setCustomId("resume").setEmoji(player.paused ? client.emoji.resume : client.emoji.pause).setStyle(player.paused ? import_discord.ButtonStyle.Success : import_discord.ButtonStyle.Secondary);
@@ -265,7 +261,7 @@ function createCollector(message, player, _track, embed, client, locale) {
       case "stop": {
         player.stopPlaying(true, false);
         await interaction.deferUpdate();
-        // [UBAHAN] Hapus tombol langsung saat tombol stop diklik
+        // Hapus tombol saat stop
         await message.edit({ components: [] });
         break;
       }
