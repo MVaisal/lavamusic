@@ -24,6 +24,7 @@ __export(QueueEnd_exports, {
 module.exports = __toCommonJS(QueueEnd_exports);
 var import_structures = require("../../structures/index");
 var import_SetupSystem = require("../../utils/SetupSystem");
+
 class QueueEnd extends import_structures.Event {
   static {
     __name(this, "QueueEnd");
@@ -37,15 +38,10 @@ class QueueEnd extends import_structures.Event {
     const guild = this.client.guilds.cache.get(player.guildId);
     if (!guild) return;
 
-    // --- PERUBAHAN STATUS DEFAULT ---
+    // --- PERUBAHAN STATUS DEFAULT (KODE ASLI KAMU) ---
     try {
-        // Mengambil dari .env, jika kosong pakai default "Fubukirea"
         const defaultActivity = process.env.BOT_ACTIVITY || "Fubukirea";
-        
-        // Mengambil tipe dari .env, jika kosong pakai default 2 (Listening)
-        // Type 2 = Listening to ...
         const defaultType = process.env.BOT_ACTIVITY_TYPE ? Number(process.env.BOT_ACTIVITY_TYPE) : 2;
-        
         this.client.user.setActivity(defaultActivity, { type: defaultType });
     } catch (e) {
         console.error("Gagal reset status:", e);
@@ -54,23 +50,41 @@ class QueueEnd extends import_structures.Event {
 
     const locale = await this.client.db.getLanguage(player.guildId);
     await (0, import_SetupSystem.updateSetup)(this.client, guild, locale);
+    
     if (player.voiceChannelId) {
       await this.client.utils.setVoiceStatus(this.client, player.voiceChannelId, "");
     }
-    const messageId = player.get("messageId");
-    if (!messageId) return;
+
+    // --- PERBAIKAN LOGIKA PENGHAPUSAN TOMBOL ---
+    // 1. Coba ambil ID pesan dari dua kemungkinan tempat penyimpanan
+    const messageId = player.get("messageId") || player.nowPlayingMessage?.id;
+    
+    if (!messageId) {
+        // Jika tidak ada ID, kita tidak bisa menghapus apa-apa
+        return; 
+    }
+
     const channel = guild.channels.cache.get(player.textChannelId);
     if (!channel) return;
-    const message = await channel.messages.fetch(messageId).catch(() => {
-      null;
-    });
-    if (!message) return;
-    if (message.editable) {
-      await message.edit({
-        components: []
-      }).catch(() => {
-        null;
-      });
+
+    try {
+        // 2. Fetch pesan secara eksplisit
+        const message = await channel.messages.fetch(messageId);
+        
+        // 3. Jika pesan ditemukan dan bisa diedit, hapus komponennya
+        if (message && message.editable) {
+            await message.edit({
+                components: []
+            });
+            // Debug log (bisa dihapus nanti jika sudah sukses)
+            console.log(`[QueueEnd] Tombol berhasil dihapus dari pesan ID: ${messageId}`);
+        }
+    } catch (error) {
+        // Jika pesan sudah dihapus manual atau tidak ketemu, error akan muncul di sini (tidak bikin bot crash)
+        // Kita abaikan error "Unknown Message" karena berarti pesan memang sudah hilang
+        if (error.code !== 10008) { 
+            console.error("[QueueEnd] Gagal menghapus tombol:", error);
+        }
     }
   }
 }
