@@ -17,7 +17,7 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 
 # Build
-RUN pnpm run build && pnpm run push
+RUN pnpm run build
 
 # Stage 2: Production image
 FROM node:23-alpine
@@ -47,6 +47,8 @@ RUN pnpm install --prod --frozen-lockfile
 COPY --from=builder --chown=node:node /opt/lavamusic/dist ./dist
 COPY --from=builder --chown=node:node /opt/lavamusic/src/utils/LavaLogo.txt ./src/utils/LavaLogo.txt
 COPY --from=builder --chown=node:node /opt/lavamusic/locales ./locales
+COPY --chown=node:node entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh
 
 # Create non-root user and set permissions
 RUN chown -R node:node /opt/lavamusic
@@ -60,4 +62,5 @@ LABEL maintainer="appujet <sdipedit@gmail.com>" \
       org.opencontainers.image.source="https://github.com/botxlab/lavamusic" \
       org.opencontainers.image.licenses="MIT"
 
+ENTRYPOINT ["./entrypoint.sh"]
 CMD ["node", "dist/index.js"]

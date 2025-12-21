@@ -1,29 +1,28 @@
-import { int, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { integer, pgTable, text, uniqueIndex } from "drizzle-orm/pg-core";
 
-export const bot = sqliteTable("Bot", {
+export const bot = pgTable("Bot", {
     botId: text("botId").primaryKey(),
-    totalPlaySong: int("totalPlaySong").default(0),
+    totalPlaySong: integer("totalPlaySong").default(0),
 });
 
-export const guild = sqliteTable("Guild", {
+export const guild = pgTable("Guild", {
     guildId: text("guildId").primaryKey(),
     prefix: text("prefix").notNull(),
     language: text("language").default("EnglishUS"),
-    defaultVolume: int("defaultVolume").default(50),
 });
 
-export const stay = sqliteTable("Stay", {
+export const stay = pgTable("Stay", {
     guildId: text("guildId").primaryKey(),
     textId: text("textId").notNull(),
     voiceId: text("voiceId").notNull(),
 });
 
-export const dj = sqliteTable("Dj", {
+export const dj = pgTable("Dj", {
     guildId: text("guildId").primaryKey(),
-    mode: int("mode").notNull(),
+    mode: integer("mode").notNull(),
 });
 
-export const role = sqliteTable(
+export const role = pgTable(
     "Role",
     {
         guildId: text("guildId").notNull().references(() => guild.guildId),
@@ -34,7 +33,7 @@ export const role = sqliteTable(
     ]
 );
 
-export const playlist = sqliteTable("Playlist", {
+export const playlist = pgTable("Playlist", {
     id: text("id").primaryKey(),
     userId: text("userId").notNull(),
     name: text("name").notNull(),
@@ -44,7 +43,7 @@ export const playlist = sqliteTable("Playlist", {
 ]);
 
 
-export const setup = sqliteTable("Setup", {
+export const setup = pgTable("Setup", {
     guildId: text("guildId").primaryKey(),
     textId: text("textId").notNull(),
     messageId: text("messageId").notNull(),

@@ -1,8 +1,9 @@
 import { eq, and } from "drizzle-orm";
-import { db } from "./index";
-import { guild, stay, setup, dj, role, playlist } from "./schemas";
+import { db, schema } from "./index";
 import { env } from "../env";
 import { randomUUID } from "crypto";
+
+const { guild, setup, stay, dj, role, playlist } = schema;
 
 export default class ServerData {
 	// -----------------------------
@@ -53,6 +54,20 @@ export default class ServerData {
 	public async getLanguage(guildId: string) {
 		const g = await this.get(guildId);
 		return g?.language ?? env.DEFAULT_LANGUAGE;
+	}
+
+	public async setDefaultVolume(guildId: string, volume: number) {
+		// First ensure the guild exists
+		await this.get(guildId);
+
+		await db.update(guild)
+			.set({ defaultVolume: volume })
+			.where(eq(guild.guildId, guildId));
+	}
+
+	public async getDefaultVolume(guildId: string): Promise<number> {
+		const g = await this.get(guildId);
+		return g?.defaultVolume ?? 50;
 	}
 
 	// -----------------------------

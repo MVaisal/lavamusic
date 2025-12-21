@@ -134,6 +134,19 @@
 				"info": "Shows the song request channel"
 			}
 		},
+		"defaultvolume": {
+			"description": "Sets the default volume for the bot in this server",
+			"options": {
+				"volume": "The default volume you want to set (0-200)"
+			},
+			"messages": {
+				"current": "The current default volume for this server is **{volume}**.",
+				"set": "`✅` | The default volume has been set to **{volume}**.",
+				"invalid_number": "Please provide a valid number.",
+				"too_low": "The volume can't be lower than 0.",
+				"too_high": "The volume can't be higher than 200."
+			}
+		},
 		"8d": {
 			"description": "on/off 8d filter",
 			"messages": {
@@ -461,6 +474,23 @@
 			},
 			"messages": {
 				"skipped_to": "Skipped to song number {number}."
+			}
+		},
+		"move": {
+			"description": "Move a track from one position to another in the queue",
+			"options": {
+				"from": "The position of the track to move",
+				"to": "The position to move the track to"
+			},
+			"errors": {
+				"no_tracks": "There are no tracks in the queue.",
+				"invalid_usage": "Invalid usage. Please provide from and to positions.",
+				"invalid_numbers": "Please provide valid track positions.",
+				"invalid_positions": "Please provide valid track positions within the queue.",
+				"same_position": "The from and to positions are the same."
+			},
+			"messages": {
+				"moved": "Moved **{title}** from position {from} to {to}."
 			}
 		},
 		"stop": {

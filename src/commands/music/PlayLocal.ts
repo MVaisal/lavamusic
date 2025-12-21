@@ -66,9 +66,8 @@ export default class PlayLocal extends Command {
 			});
 		}
 
-		const audioExtensions = [".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a"];
-		const extension = attachment.name.split(".").pop()?.toLowerCase();
-		if (!audioExtensions.includes(`.${extension}`)) {
+		const contentType = attachment.contentType || "";
+		if (!contentType.startsWith("audio/") && !contentType.startsWith("video/")) {
 			return ctx.sendMessage({
 				embeds: [
 					this.client
